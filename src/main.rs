@@ -1,8 +1,8 @@
 pub mod bots;
 
-use crate::bots::*;
+use crate::bots::startup::Args;
 
-fn main() {
-    flaud::flaud_test();
-    rnetr::rnetr_test();
+#[tokio::main]
+async fn main() {
+    let args = <Args as clap::Parser>::parse();
 }

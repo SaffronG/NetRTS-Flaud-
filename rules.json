@@ -1,0 +1,54 @@
+{
+    "units": [
+        {
+            "type": "Worker",
+            "cost": 1,
+            "buildTicks": 1,
+            "maxHp": 1,
+            "damage": 1,
+            "armor": 1,
+            "range": 1,
+            "attackCooldown": 1,
+            "vision": 1,
+            "speed": 1,
+            "producedAt": "CommandCenter"
+        }
+    ],
+    "buildings": [
+        {
+            "type": "CommandCenter",
+            "cost": 1,
+            "buildWork": 1,
+            "maxHp": 1,
+            "armor": 1,
+            "vision": 1,
+            "damage": 1,
+            "range": 1,
+            "attackCooldown": 1,
+            "storageBonus": 1,
+            "isDropOff": true,
+            "produces": [],
+            "canResearch": true,
+            "requires": []
+        }
+    ],
+    "upgrades": [
+        {
+            "type": "Weapons1",
+            "cost": 1,
+            "researchTicks": 1,
+            "requires": "Weapons1",
+            "effect": "string"
+        }
+    ],
+    "economy": {
+        "startingResources": 1,
+        "startingWorkers": 1,
+        "workerCarryCapacity": 1,
+        "gatherPerTick": 1,
+        "maxProductionQueue": 1
+    },
+    "notes": [
+        "string"
+    ]
+}
