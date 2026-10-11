@@ -1,20 +1,22 @@
 #[allow(unused)]
 pub struct Api {
-    server: String,
-    api_key: String,
+    pub server: String,
+    pub api_key: String,
 }
 
 impl Api {
-    fn new(server_addr: String, key: String) -> Self {
+    pub fn new(server_addr: String, key: String) -> Self {
         Self {
             server: server_addr,
             api_key: key,
         }
     }
 
-    fn send(self, method: String, path: String, body: String) {
-        
-    }
+    pub fn join_match(self) {}
+
+    pub fn connect(self, match_id: String) {}
+
+    pub fn results(self, match_id: String) {}
 }
 
 #[cfg(test)]

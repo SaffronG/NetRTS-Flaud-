@@ -6,34 +6,47 @@ use clap::{ArgGroup, Parser};
 #[command(group(ArgGroup::new("mode").args(["vs", "create", "join"])))]
 pub struct Args {
     #[arg(long, env = "NETRTS_SERVER", default_value = "http://localhost:5080")]
-    server: String,
+    pub server: String,
 
     #[arg(long, help = "bot name to register (needed unless --key is given)")]
-    name: Option<String>,
+    pub name: Option<String>,
 
-    #[arg(long, help = "existing API key", env = "NETRTS_API_KEY", hide_env_values = true)]
-    key: Option<String>,
+    #[arg(
+        long,
+        help = "existing API key",
+        env = "NETRTS_API_KEY",
+        hide_env_values = true
+    )]
+    pub key: Option<String>,
 
     #[arg(long, help = "house bot to play against", default_value = "sitter")]
-    vs: String,
+    pub vs: String,
 
-    #[arg(long, help = "create a match for others to join", default_value_t = false)]
-    create: bool,
+    #[arg(
+        long,
+        help = "create a match for others to join",
+        default_value_t = false
+    )]
+    pub create: bool,
 
     #[arg(long, help = "join an existing match", value_name = "MATCH_ID")]
-    join: Option<String>,
+    pub join: Option<String>,
 
     #[arg(long, help = "seats when using --create", default_value_t = 2)]
-    players: i32,
+    pub players: i32,
 
     #[arg(long, help = "tick interval for a match you create")]
-    tick_ms: Option<i32>,
+    pub tick_ms: Option<i32>,
 
     #[arg(long, help = "tick limit for a match you create")]
-    max_ticks: Option<i32>,
+    pub max_ticks: Option<i32>,
 
-    #[arg(long, help = "map seed for a match you create", allow_negative_numbers = true)]
-    seed: Option<i32>,
+    #[arg(
+        long,
+        help = "map seed for a match you create",
+        allow_negative_numbers = true
+    )]
+    pub seed: Option<i32>,
 }
 
 #[cfg(test)]
@@ -45,8 +58,16 @@ mod startup_test {
     use std::ffi::OsStr;
 
     const ALL_IDS: [&str; 10] = [
-        "server", "name", "key", "vs", "create", "join",
-        "players", "tick_ms", "max_ticks", "seed",
+        "server",
+        "name",
+        "key",
+        "vs",
+        "create",
+        "join",
+        "players",
+        "tick_ms",
+        "max_ticks",
+        "seed",
     ];
 
     fn cmd() -> Command {
@@ -115,9 +136,16 @@ mod startup_test {
     #[test]
     fn long_flags_match_python_spelling() {
         let expected = [
-            ("server", "server"), ("name", "name"), ("key", "key"), ("vs", "vs"),
-            ("create", "create"), ("join", "join"), ("players", "players"),
-            ("tick_ms", "tick-ms"), ("max_ticks", "max-ticks"), ("seed", "seed"),
+            ("server", "server"),
+            ("name", "name"),
+            ("key", "key"),
+            ("vs", "vs"),
+            ("create", "create"),
+            ("join", "join"),
+            ("players", "players"),
+            ("tick_ms", "tick-ms"),
+            ("max_ticks", "max-ticks"),
+            ("seed", "seed"),
         ];
         for (id, long) in expected {
             assert_eq!(arg(id).get_long(), Some(long), "--flag name for {id}");
@@ -153,7 +181,16 @@ mod startup_test {
     fn env_vars_match_python() {
         assert_eq!(arg("server").get_env(), Some(OsStr::new("NETRTS_SERVER")));
         assert_eq!(arg("key").get_env(), Some(OsStr::new("NETRTS_API_KEY")));
-        for id in ["name", "vs", "create", "join", "players", "tick_ms", "max_ticks", "seed"] {
+        for id in [
+            "name",
+            "vs",
+            "create",
+            "join",
+            "players",
+            "tick_ms",
+            "max_ticks",
+            "seed",
+        ] {
             assert_eq!(arg(id).get_env(), None, "{id} should not read an env var");
         }
     }
@@ -171,7 +208,10 @@ mod startup_test {
     #[test]
     fn value_flags_store_a_single_value() {
         for id in ALL_IDS.iter().filter(|id| **id != "create") {
-            assert!(matches!(arg(id).get_action(), ArgAction::Set), "{id} should be ArgAction::Set");
+            assert!(
+                matches!(arg(id).get_action(), ArgAction::Set),
+                "{id} should be ArgAction::Set"
+            );
         }
     }
 
@@ -194,7 +234,10 @@ mod startup_test {
     #[test]
     fn help_strings_match_python() {
         let expected = [
-            ("name", "bot name to register (needed unless --key is given)"),
+            (
+                "name",
+                "bot name to register (needed unless --key is given)",
+            ),
             ("key", "existing API key"),
             ("vs", "house bot to play against"),
             ("create", "create a match for others to join"),
@@ -236,7 +279,11 @@ mod startup_test {
             assert_eq!(m.value_source(id), Some(ValueSource::DefaultValue), "{id}");
         }
         for id in ["name", "key", "join", "tick_ms", "max_ticks", "seed"] {
-            assert_eq!(m.value_source(id), None, "{id} should be absent (Python None)");
+            assert_eq!(
+                m.value_source(id),
+                None,
+                "{id} should be absent (Python None)"
+            );
         }
 
         let a = Args::from_arg_matches(&m).unwrap();
@@ -250,14 +297,30 @@ mod startup_test {
     #[test]
     fn values_are_stored_with_python_types() {
         let m = matches(&[
-            "--server", "http://x", "--name", "Flaud", "--key", "k", "--join", "abc",
-            "--players", "4", "--tick-ms", "250", "--max-ticks", "5000", "--seed", "42",
+            "--server",
+            "http://x",
+            "--name",
+            "Flaud",
+            "--key",
+            "k",
+            "--join",
+            "abc",
+            "--players",
+            "4",
+            "--tick-ms",
+            "250",
+            "--max-ticks",
+            "5000",
+            "--seed",
+            "42",
         ]);
         for id in ["server", "name", "key", "join", "vs"] {
-            m.try_get_one::<String>(id).unwrap_or_else(|e| panic!("{id}: {e}"));
+            m.try_get_one::<String>(id)
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
         }
         for id in ["players", "tick_ms", "max_ticks", "seed"] {
-            m.try_get_one::<i32>(id).unwrap_or_else(|e| panic!("{id}: {e}"));
+            m.try_get_one::<i32>(id)
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
         }
         m.try_get_one::<bool>("create").unwrap();
 
@@ -278,13 +341,25 @@ mod startup_test {
     #[test]
     fn equals_syntax_and_negative_seed() {
         let a = parse(&["--players=3", "--key=abc", "--seed=-7"]);
-        assert_eq!((a.players, a.key.as_deref(), a.seed), (3, Some("abc"), Some(-7)));
+        assert_eq!(
+            (a.players, a.key.as_deref(), a.seed),
+            (3, Some("abc"), Some(-7))
+        );
         assert_eq!(parse(&["--seed", "-5"]).seed, Some(-5));
     }
 
     #[test]
     fn repeated_flag_keeps_last_value_like_argparse() {
-        let a = parse(&["--players", "2", "--players", "3", "--key", "a", "--key", "b"]);
+        let a = parse(&[
+            "--players",
+            "2",
+            "--players",
+            "3",
+            "--key",
+            "a",
+            "--key",
+            "b",
+        ]);
         assert_eq!(a.players, 3);
         assert_eq!(a.key.as_deref(), Some("b"));
     }
@@ -322,21 +397,33 @@ mod startup_test {
         let test_cmd = || hermetic_cmd().mut_arg("key", |a| a.env(VAR));
 
         let from_env = test_cmd().try_get_matches_from(["bot"]).unwrap();
-        let from_cli = test_cmd().try_get_matches_from(["bot", "--key", "cli-key"]).unwrap();
+        let from_cli = test_cmd()
+            .try_get_matches_from(["bot", "--key", "cli-key"])
+            .unwrap();
 
         unsafe { std::env::remove_var(VAR) };
 
         assert_eq!(from_env.value_source("key"), Some(ValueSource::EnvVariable));
-        assert_eq!(from_env.get_one::<String>("key").map(String::as_str), Some("env-key"));
+        assert_eq!(
+            from_env.get_one::<String>("key").map(String::as_str),
+            Some("env-key")
+        );
         assert_eq!(from_cli.value_source("key"), Some(ValueSource::CommandLine));
-        assert_eq!(from_cli.get_one::<String>("key").map(String::as_str), Some("cli-key"));
+        assert_eq!(
+            from_cli.get_one::<String>("key").map(String::as_str),
+            Some("cli-key")
+        );
     }
 
     #[test]
     fn integer_flags_reject_non_integers() {
         for flag in ["--players", "--tick-ms", "--max-ticks", "--seed"] {
             for bad in ["abc", "1.5"] {
-                assert_eq!(err_kind(&[flag, bad]), ErrorKind::ValueValidation, "{flag} {bad}");
+                assert_eq!(
+                    err_kind(&[flag, bad]),
+                    ErrorKind::ValueValidation,
+                    "{flag} {bad}"
+                );
             }
         }
     }
@@ -345,7 +432,10 @@ mod startup_test {
     fn value_flags_require_a_value() {
         for id in ALL_IDS.iter().filter(|id| **id != "create") {
             let flag = format!("--{}", arg(id).get_long().unwrap());
-            assert!(try_matches(&[&flag]).is_err(), "{flag} with no value should fail");
+            assert!(
+                try_matches(&[&flag]).is_err(),
+                "{flag} with no value should fail"
+            );
         }
     }
 
@@ -356,3 +446,4 @@ mod startup_test {
         assert_eq!(err_kind(&["stray"]), ErrorKind::UnknownArgument);
     }
 }
+
