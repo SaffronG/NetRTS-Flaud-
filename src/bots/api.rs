@@ -164,7 +164,8 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_json, header, method, path};
+    use serde_json::json;
+use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn summary_json(id: &str) -> serde_json::Value {
