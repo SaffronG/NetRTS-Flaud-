@@ -164,7 +164,6 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -197,7 +196,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let api = Api::new(server.uri(), "test-key");
+        let api = Api::new("Flaud".to_string(), server.uri(), "test-key");
         let req = CreateMatchRequest {
             house_bots: Some(vec!["rusher".into()]),
             settings: Some(MatchSettingsDto { seed: Some(1234), ..Default::default() }),
@@ -220,7 +219,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let api = Api::new(server.uri(), "test-key");
+        let api = Api::new("Flaude".to_string(), server.uri(), "test-key");
         let err = api.join_match("nope").await.unwrap_err();
         assert_eq!(err.status(), Some(reqwest::StatusCode::NOT_FOUND));
     }
