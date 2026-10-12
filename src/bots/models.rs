@@ -113,6 +113,12 @@ pub struct HouseBotDto {
     pub description: String,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchId {
+    pub match_id: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MatchSettingsDto {
@@ -128,6 +134,18 @@ pub struct MatchSettingsDto {
     pub tick_interval_ms: Option<i32>,
 }
 
+impl MatchSettingsDto {
+    pub fn new(h: i32, w: i32, mt: i32, s: i32, tim: i32) -> Self {
+        Self {
+            map_height: Some(h),
+            map_width: Some(w),
+            max_ticks: Some(mt),
+            seed: Some(s),
+            tick_interval_ms: Some(tim),
+        }
+    }
+}
+
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMatchRequest {
@@ -137,6 +155,16 @@ pub struct CreateMatchRequest {
     pub max_players: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settings: Option<MatchSettingsDto>,
+}
+
+impl CreateMatchRequest {
+    pub fn new(hb: Vec<String>, mp: i32, s: MatchSettingsDto) -> Self {
+        Self {
+            house_bots: Some(hb),
+            max_players: Some(mp),
+            settings: Some(s),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
