@@ -8,6 +8,8 @@ use crate::bots::models::*;
 /// one connection pool.
 #[derive(Clone)]
 pub struct Api {
+    /// Name of the selected bot
+    pub bot_name: String,
     /// Base URL of the server, e.g. `http://localhost:8080/`.
     pub server: Url,
     /// Player API key, sent with every authenticated request.
@@ -41,12 +43,13 @@ impl Api {
     /// # use netrts_bot::bots::api::Api;
     /// let api = Api::new("http://localhost:8080", "my-api-key");
     /// ```
-    pub fn new<S, K>(server_addr: S, key: K) -> Self
+    pub fn new<S, K>(name: String, server_addr: S, key: K) -> Self
     where
         S: AsRef<str>,
         K: Into<String>,
     {
         Self {
+            bot_name: name,
             server: Url::parse(server_addr.as_ref()).expect("Invalid url"),
             api_key: key.into(),
             server_tok: None,
@@ -159,11 +162,66 @@ impl Api {
 }
 
 #[cfg(test)]
-mod api_tests {
-    // use super::*;
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[test]
-    fn initial_setup() {
-        assert!(true);
+    fn summary_json(id: &str) -> serde_json::Value {
+        json!({
+            "matchId": id,
+            "createdAt": "2026-10-11T00:00:00Z",
+            "status": "Waiting",
+            "mapWidth": 64, "mapHeight": 64,
+            "maxPlayers": 2, "maxTicks": 2000,
+            "seed": 1234, "tick": 0, "tickIntervalMs": 100,
+            "outcome": null,
+            "players": []
+        })
+    }
+
+    #[tokio::test]
+    async fn create_match_sends_house_bot_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/v1/matches"))
+            .and(header("X-Api-Key", "test-key"))
+            .and(body_json(json!({
+                "houseBots": ["rusher"],
+                "settings": { "seed": 1234 }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(summary_json("m1")))
+            .expect(1) // fails the test if not called exactly once
+            .mount(&server)
+            .await;
+
+        let api = Api::new(server.uri(), "test-key");
+        let req = CreateMatchRequest {
+            house_bots: Some(vec!["rusher".into()]),
+            settings: Some(MatchSettingsDto { seed: Some(1234), ..Default::default() }),
+            ..Default::default()
+        };
+
+        let summary = api.create_match(&req).await.unwrap();
+        assert_eq!(summary.match_id, "m1");
+    }
+
+    #[tokio::test]
+    async fn join_match_returns_error_on_404() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/v1/matches/nope/join"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "code": "match_not_found", "message": "No such match"
+            })))
+            .mount(&server)
+            .await;
+
+        let api = Api::new(server.uri(), "test-key");
+        let err = api.join_match("nope").await.unwrap_err();
+        assert_eq!(err.status(), Some(reqwest::StatusCode::NOT_FOUND));
     }
 }

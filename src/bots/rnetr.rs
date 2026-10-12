@@ -1,3 +1,5 @@
+use crate::bots::shared_logic;
+
 pub fn rnetr_test() {
     println!("Hello from RnetrBot!");
 }
