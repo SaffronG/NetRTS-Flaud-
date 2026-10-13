@@ -112,6 +112,8 @@ pub struct Api {
     ///
     /// Leave empty before registering: the header is skipped when the key is empty.
     pub api_key: String,
+    /// Match id for the currently opened match
+    pub match_id: String,
     client: Client,
 }
 
@@ -145,6 +147,7 @@ impl Api {
             server: Url::parse(&addr)
                 .unwrap_or_else(|e| panic!("Invalid server URL {addr:?}: {e}")),
             api_key: key.into(),
+            match_id: String::new(),
             client: Client::new(),
         }
     }

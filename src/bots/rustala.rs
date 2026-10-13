@@ -23,6 +23,12 @@ impl Bot for RustalaDaora {
     }
 }
 
+impl Drop for RustalaDaora {
+    fn drop(&mut self) {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod rnetr_tests {

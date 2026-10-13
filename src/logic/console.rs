@@ -86,11 +86,31 @@ impl MenuContext {
 
                 Self::line("\r\nCreating game...", false)?;
                 match self.client.create_match(&request).await {
-                    Ok(summary) => Self::line(&format!("\r\nCreated match: {summary:?}"), false)?,
+                    Ok(summary) => {
+                        self.client.match_id = summary.match_id.clone();
+                        Self::line(&format!("\r\nCreated match: {summary:?}"), false)?
+                    },
                     Err(e) => Self::line(&format!("\r\nFailed to create match: {e}"), true)?,
                 }
             }
-            1 => Self::line("\r\nJoining Game...", false)?,
+            1 => {
+                Self::line("\r\nJoining Game...", false)?;
+                match self.client.join_match(&self.client.match_id).await {
+                    Ok(summary) => (),
+                    Err(err) => Self::line(&format!("Failed to join game: {}", err), true)?,
+                }
+
+                let mut state = loop {
+                    match self.client.get_state(&self.client.match_id, 0, None).await {
+                        Err(e) if e.code() == Some("MATCH_NOT_STARTED") => continue,
+                        other => break other?,
+                    }
+                };
+                while state.status != MatchStatus::Completed {
+                    let tick = state.tick;
+                    state = self.client.get_state(&self.client.match_id, tick + 1, Some(tick)).await?;
+                }
+            },
             2 => Self::line("\r\nFetching Results...", false)?,
             3 => {
                 let Some(bot_name) = Self::prompt("Enter desired bot name: ")? else {
