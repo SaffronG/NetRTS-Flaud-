@@ -1,7 +1,13 @@
 use crate::bots::shared_logic;
 
-pub fn rnetr_test() {
-    println!("Hello from RnetrBot!");
+pub struct RustalaDaora {
+
+}
+
+impl shared_logic::Bot for RustalaDaora {
+    fn decide(_state: super::models::GameStateDto) {
+        todo!()
+    }
 }
 
 #[cfg(test)]
