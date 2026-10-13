@@ -6,25 +6,11 @@ pub struct RustalaDaora {
 }
 
 impl Bot for RustalaDaora {
-    fn decide(_state: GameStateDto) {
+    fn decide(&self) {
         todo!()
     }
-    
-    fn new(self, _game_map: MapDto, _rules: RulesDto) -> Self {
-        todo!()
-    }
-    
-    fn enemy_base(_state: GameStateDto) {
-        todo!()
-    }
-    
-    fn find_site(_state: GameStateDto, _cc: BuildingType) {
-        todo!()
-    }
-}
 
-impl Drop for RustalaDaora {
-    fn drop(&mut self) {
+    fn new(s: GameStateDto, m: MapDto, r: RulesDto) -> Self {
         todo!()
     }
 }
