@@ -2,7 +2,7 @@
 
 A bot for a simplified version of StarCraft (NetRTS) for the SnowCollege coding competition 2026-2027.
 
-There are two seperate bot implementations on is an algorithmically based bod, the other is managed by the open-source fly brain.
+There are two Three bot implementations one is an algorithmically based bod, the second is managed by the open-source fly brain, and the final bot is a test bot based on the provided example bots.
 
 - Flaud -- Fly Brain
 - RustalaDaora -- Algorithm-Based
