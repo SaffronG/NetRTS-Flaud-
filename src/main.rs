@@ -1,6 +1,6 @@
 pub mod bots;
 
-use crate::bots::{api::Api, models::*, startup::Args};
+use crate::bots::{api::Api, startup::Args, console::MenuContext};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -34,17 +34,18 @@ async fn main() {
     match key {
         Some(val) => {
             let api = Api::new(name, &args.server, val);
-            let request = CreateMatchRequest {
-                house_bots: Some(vec!["balanced".into(), "rusher".into()]),
-                settings: Some(MatchSettingsDto {
-                    seed: Some(1234),
-                    max_ticks: Some(2000),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let _summary = api.create_match(&request).await;
-            println!("{}:api__key: {}", &api.bot_name, &api.api_key);
+
+            let mut menu = MenuContext::new(api);
+
+            match menu.ui_loop().await {
+                Ok(_) => {
+                    std::process::exit(0);
+                },
+                Err(code) => {
+                    eprint!("Error: {}", code);
+                    std::process::exit(1);
+                }
+            }
         }
         None => {
             eprintln!("Failed to initialize: No explicit key passed, and no matching bot name found in environment.");
