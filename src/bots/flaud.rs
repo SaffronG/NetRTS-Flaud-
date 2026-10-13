@@ -1,7 +1,3 @@
-pub fn flaud_test() {
-    println!("Hello from FlaudBot!");
-}
-
 #[cfg(test)]
 #[allow(unused_imports)]
 mod flaud_tests {

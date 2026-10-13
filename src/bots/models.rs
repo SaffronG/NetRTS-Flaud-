@@ -611,3 +611,29 @@ pub struct CommandError {
     pub code: String,
     pub message: String,
 }
+
+/// Final outcome of a finished match (`GET /api/v1/matches/{id}/result`).
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchResultDto {
+    pub match_id: String,
+    pub outcome: MatchOutcomeDto,
+    #[serde(default)]
+    pub players: Vec<PlayerResultDto>,
+}
+ 
+/// One player's final score and unit/building counts.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerResultDto {
+    pub player_id: String,
+    pub name: String,
+    pub slot: i32,
+    pub winner: bool,
+    pub score: ScoreDto,
+    pub units_produced: i32,
+    pub units_lost: i32,
+    pub units_killed: i32,
+    pub buildings_lost: i32,
+    pub buildings_destroyed: i32,
+}
