@@ -1,6 +1,7 @@
 pub mod bots;
+pub mod logic;
 
-use crate::bots::{api::Api, startup::Args, console::MenuContext};
+use crate::logic::{api::Api, startup::Args, console::MenuContext};
 use std::collections::HashMap;
 
 #[tokio::main]

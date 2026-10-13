@@ -1,4 +1,4 @@
-use crate::bots::models::{BuildingType, *};
+use crate::logic::models::{BuildingType, *};
 
 pub trait Bot {
     fn decide(state: GameStateDto);

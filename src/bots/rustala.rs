@@ -1,23 +1,24 @@
-use crate::bots::shared_logic;
+use crate::logic::shared::Bot;
+use crate::logic::models::*;
 
 pub struct RustalaDaora {
 
 }
 
-impl shared_logic::Bot for RustalaDaora {
-    fn decide(_state: super::models::GameStateDto) {
+impl Bot for RustalaDaora {
+    fn decide(_state: GameStateDto) {
         todo!()
     }
     
-    fn new(self, game_map: super::models::MapDto, rules: super::models::RulesDto) -> Self {
+    fn new(self, _game_map: MapDto, _rules: RulesDto) -> Self {
         todo!()
     }
     
-    fn enemy_base(state: super::models::GameStateDto) {
+    fn enemy_base(_state: GameStateDto) {
         todo!()
     }
     
-    fn find_site(state: super::models::GameStateDto, cc: super::models::BuildingType) {
+    fn find_site(_state: GameStateDto, _cc: BuildingType) {
         todo!()
     }
 }

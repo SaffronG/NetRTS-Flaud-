@@ -1,5 +1,5 @@
-use crate::bots::api::Api;
-use crate::bots::models::*;
+use crate::logic::api::Api;
+use crate::logic::models::*;
 use crossterm::ExecutableCommand;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, MoveToRow, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
