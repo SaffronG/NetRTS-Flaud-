@@ -1,19 +1,7 @@
 use crate::logic::shared::Bot;
 use crate::logic::models::*;
 
-pub struct RustalaDaora {
-
-}
-
-impl Bot for RustalaDaora {
-    fn decide(&self) {
-        todo!()
-    }
-
-    fn new(s: GameStateDto, m: MapDto, r: RulesDto) -> Self {
-        todo!()
-    }
-}
+pub struct RustalaDaora { }
 
 #[cfg(test)]
 #[allow(unused_imports)]

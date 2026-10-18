@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use crate::logic::models::{BuildingType, *};
+use std::collections::HashMap;
 
 pub trait Bot {
-    fn decide(&self);
+    fn decide(&mut self) -> Vec<CommandRequest>;
 
     fn building_cost(r: RulesDto) -> HashMap<BuildingType, i32> {
         r.buildings.iter().fold(HashMap::new(), |mut acc, b| {
@@ -39,7 +39,11 @@ mod tests {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 let expected = if dx == 0 && dy == 0 { 0 } else { 1 };
-                assert_eq!(dist(10, 10, 10 + dx, 10 + dy), expected, "offset ({dx}, {dy})");
+                assert_eq!(
+                    dist(10, 10, 10 + dx, 10 + dy),
+                    expected,
+                    "offset ({dx}, {dy})"
+                );
             }
         }
     }
@@ -52,3 +56,4 @@ mod tests {
         assert_eq!(dist(1_000_000, 5, 0, 0), dist(0, 0, 1_000_000, 5));
     }
 }
+

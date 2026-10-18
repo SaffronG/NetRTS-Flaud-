@@ -1,7 +1,9 @@
 pub mod bots;
 pub mod logic;
+pub mod ui;
 
-use crate::logic::{api::Api, startup::Args, console::MenuContext};
+use crate::logic::api::Api;
+use crate::ui::{console::MenuContext, startup::Args};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -26,7 +28,8 @@ async fn main() {
 
             name = bot_name.clone();
 
-            bot_keys.get(&bot_name)
+            bot_keys
+                .get(&bot_name)
                 .or_else(|| bot_keys.get(&bot_name))
                 .cloned()
         }
@@ -41,7 +44,7 @@ async fn main() {
             match menu.ui_loop().await {
                 Ok(_) => {
                     std::process::exit(0);
-                },
+                }
                 Err(code) => {
                     eprint!("Error: {}", code);
                     std::process::exit(1);
@@ -49,8 +52,11 @@ async fn main() {
             }
         }
         None => {
-            eprintln!("Failed to initialize: No explicit key passed, and no matching bot name found in environment.");
+            eprintln!(
+                "Failed to initialize: No explicit key passed, and no matching bot name found in environment."
+            );
             std::process::exit(1);
         }
     }
 }
+

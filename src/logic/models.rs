@@ -534,19 +534,37 @@ impl CommandRequest {
     }
 
     pub fn move_to(unit_ids: Vec<i32>, x: i32, y: i32) -> Self {
-        CommandRequest { unit_ids: Some(unit_ids), x: Some(x), y: Some(y), ..Self::new(CommandType::Move) }
+        CommandRequest {
+            unit_ids: Some(unit_ids),
+            x: Some(x),
+            y: Some(y),
+            ..Self::new(CommandType::Move)
+        }
     }
 
     pub fn attack(unit_ids: Vec<i32>, target_id: i32) -> Self {
-        CommandRequest { unit_ids: Some(unit_ids), target_id: Some(target_id), ..Self::new(CommandType::Attack) }
+        CommandRequest {
+            unit_ids: Some(unit_ids),
+            target_id: Some(target_id),
+            ..Self::new(CommandType::Attack)
+        }
     }
 
     pub fn attack_move(unit_ids: Vec<i32>, x: i32, y: i32) -> Self {
-        CommandRequest { unit_ids: Some(unit_ids), x: Some(x), y: Some(y), ..Self::new(CommandType::Attack) }
+        CommandRequest {
+            unit_ids: Some(unit_ids),
+            x: Some(x),
+            y: Some(y),
+            ..Self::new(CommandType::Attack)
+        }
     }
 
     pub fn gather(unit_ids: Vec<i32>, deposit_id: i32) -> Self {
-        CommandRequest { unit_ids: Some(unit_ids), target_id: Some(deposit_id), ..Self::new(CommandType::Gather) }
+        CommandRequest {
+            unit_ids: Some(unit_ids),
+            target_id: Some(deposit_id),
+            ..Self::new(CommandType::Gather)
+        }
     }
 
     pub fn build(unit_ids: Vec<i32>, building: BuildingType, x: i32, y: i32) -> Self {
@@ -569,15 +587,27 @@ impl CommandRequest {
     }
 
     pub fn rally(building_id: i32, x: i32, y: i32) -> Self {
-        CommandRequest { building_id: Some(building_id), x: Some(x), y: Some(y), ..Self::new(CommandType::Rally) }
+        CommandRequest {
+            building_id: Some(building_id),
+            x: Some(x),
+            y: Some(y),
+            ..Self::new(CommandType::Rally)
+        }
     }
 
     pub fn research(building_id: i32, upgrade: UpgradeType) -> Self {
-        CommandRequest { building_id: Some(building_id), upgrade: Some(upgrade), ..Self::new(CommandType::Research) }
+        CommandRequest {
+            building_id: Some(building_id),
+            upgrade: Some(upgrade),
+            ..Self::new(CommandType::Research)
+        }
     }
 
     pub fn stop(unit_ids: Vec<i32>) -> Self {
-        CommandRequest { unit_ids: Some(unit_ids), ..Self::new(CommandType::Stop) }
+        CommandRequest {
+            unit_ids: Some(unit_ids),
+            ..Self::new(CommandType::Stop)
+        }
     }
 }
 
@@ -621,7 +651,7 @@ pub struct MatchResultDto {
     #[serde(default)]
     pub players: Vec<PlayerResultDto>,
 }
- 
+
 /// One player's final score and unit/building counts.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -637,3 +667,4 @@ pub struct PlayerResultDto {
     pub buildings_lost: i32,
     pub buildings_destroyed: i32,
 }
+
