@@ -1,0 +1,122 @@
+# Changelog
+
+## 2026-10-18 16:09:29 MDT — Menu header labels and README
+
+### Fixed
+
+- `src/ui/console.rs`: the menu header printed its values in the wrong order ("BotName" showed the API key, "ServerAddr" the bot name, "ApiKey" the server). Each label now shows its own value.
+
+### Changed
+
+- `src/ui/console.rs`: added `MenuContext::mask_key`; the menu shows the API key as `********` plus its last 4 characters instead of the full key.
+- `README.md`: documented the key lookup order and registration, the menu options, the match flags, the `Bot` trait, and `TestBot`. Fixed the help command (`cargo run -- --help`, `NetRTS-Flaud-.exe`) and typos.
+
+## 2026-10-18 16:07:59 MDT — Step 7: cost lookup cleanups
+
+### Changed
+
+- `src/logic/shared.rs`: `Bot::building_cost` now takes `&RulesDto` instead of `RulesDto`, so calling it no longer uses up the rules.
+- `src/bots/test_bot.rs`: replaced the `cost` and `building_cost` maps with a stored `rules: RulesDto`, and added `unit_price` / `building_price`, which use the existing `RulesDto::unit()` / `RulesDto::building()` lookups.
+
+### Fixed
+
+- A unit or building type missing from the rules no longer panics on a `HashMap` index; it is treated as unaffordable (`i32::MAX`) and simply never bought.
+
+## 2026-10-18 16:06:26 MDT — Step 6: register a new bot when there is no key
+
+### Changed
+
+- `src/main.rs`: the API key is now found in this order: `--key` / `NETRTS_API_KEY`, then an env var (or `.env` entry) named after `--name`, then registering `--name` with `register_bot`. Previously the app exited if neither of the first two was found.
+- `src/main.rs`: added `register(name, server)`. On success it prints the new key (shown once), suggests adding `<name>=<key>` to `.env`, and waits for Enter so the key isn't cleared by the menu screen. On `NAME_TAKEN` it exits with "'name' is already registered - pass its --key, or choose another --name."; other errors exit with the error message.
+- `src/main.rs`: with no `--name` and no key, the error now reads "pass --name to register, or --key / NETRTS_API_KEY", as in `example_bot.py`.
+- `src/main.rs`: `--name` is now kept as the display name even when `--key` is given (it was previously blank).
+- `src/main.rs`: removed the duplicate `bot_keys.get(&bot_name).or_else(|| bot_keys.get(&bot_name))` lookup and the nested `match` on the key.
+
+## 2026-10-18 16:04:39 MDT — Step 5: wire command-line options into the menu
+
+### Changed
+
+- `src/ui/console.rs`: `MenuContext::new(api, args)` now takes the parsed `Args`.
+- `src/ui/console.rs`: added `MenuContext::create_request()`, mirroring `get_into_match` in `example_bot.py`:
+  - `--create` → open match with `maxPlayers = --players`;
+  - otherwise → match vs the `--vs` house bot (default `sitter`);
+  - settings come from `--tick-ms`, `--max-ticks` and `--seed`; unset ones are left out so the server uses its defaults.
+- `src/ui/console.rs`: Create Game uses `create_request()` and prints either "waiting for N more player(s) to join it" or `vs house bot '<name>'`.
+- `src/ui/console.rs`: Join Game shows the `--join` id in the prompt; leaving it blank joins that match.
+- `src/main.rs`: passes `args` to `MenuContext::new` (clones `args.name` so `args` isn't partially moved).
+
+### Removed
+
+- The hardcoded Create Game request (house bots `balanced` + `rusher`, seed `1234`, max ticks `2000`). The default opponent is now `sitter` with server-default settings; pass `--vs`, `--seed` and `--max-ticks` to choose.
+
+## 2026-10-18 16:02:57 MDT — Step 4: View Results
+
+### Changed
+
+- `src/ui/console.rs`: added `MenuContext::show_result(match_id)`, which calls `get_result` and prints the tick count, end reason and winner (or "draw"), then one line per player with total score (destruction + economy + survival, as in `example_bot.py`), the score breakdown, and units made / lost / killed.
+- `src/ui/console.rs`: View Results (menu option 2) now asks for a match id; leaving it blank uses the last match created or joined. Errors (e.g. match not finished yet) are printed instead of ending the menu.
+- `src/ui/console.rs`: `play_match` now prints the result automatically when the match completes.
+
+## 2026-10-18 16:01:37 MDT — Step 3: Create Game plays immediately
+
+### Changed
+
+- `src/ui/console.rs`: Create Game (menu option 0) now goes straight into `play_match::<TestBot>()` after creating the match, matching `example_bot.py`. The creator is seated when the match is created, so no join call is made. If creation fails it returns to the menu.
+- `src/ui/console.rs`: Join Game (menu option 1) now asks for a match id, so you can join a match someone else created. On success it stores the id and plays; if the join fails (match not found, full, or already started) it returns to the menu instead of polling anyway.
+- `src/ui/console.rs`: the create message now prints just the match id instead of the full summary debug dump.
+
+### Fixed
+
+- Calling Join after Create on a house-bot match failed with "already started", because house-bot matches start as soon as they are created.
+- Removed the unused `summary` variable warning in the join handler.
+
+## 2026-10-18 15:59:38 MDT — Step 2: run the bot in the Join Game loop
+
+### Changed
+
+- `src/ui/console.rs`: added `MenuContext::play_match::<B: Bot>()`, which:
+  - long-polls `get_state(id, 0)` until the match starts, printing "Waiting for the match to fill up..." on `MATCH_NOT_STARTED`;
+  - loads rules and map only after the first state arrives, then creates the bot with `B::new(map, rules)`;
+  - each tick calls `bot.decide(&state)`, submits the commands, and prints any rejected ones with their error message;
+  - prints ore and unit count every 100 ticks, and `CommandFailed` / `BuildingCompleted` / `PlayerEliminated` events;
+  - long-polls the next tick with `sinceTick` so only new events come back.
+- `src/ui/console.rs`: Join Game (menu option 1) now calls `play_match::<TestBot>()` instead of only waiting for ticks.
+
+## 2026-10-18 15:58:03 MDT — Step 1: pass state to `Bot::decide`
+
+### Changed
+
+- `src/logic/shared.rs`: `Bot::decide(&mut self)` is now `Bot::decide(&mut self, state: &GameStateDto)`, so the bot gets each tick's state when it is called.
+- `src/logic/shared.rs`: `Bot::new(s, m, r)` is now `Bot::new(m, r)`, since bots no longer keep a copy of the state.
+- `src/bots/test_bot.rs`: removed the stored `state` field and `update_state`; `decide`, `find_site` and `enemy_base` take the state as a parameter.
+
+## 2026-10-18 15:55:02 MDT
+
+### Changed
+
+- `src/bots/test_bot.rs`: rewrote `TestBot` as a Rust port of `example_bot.py` for testing the API end to end.
+  - Builds one Barracks once 6+ workers exist; retries after 40 ticks if it never appears. Placement via `find_site` (open tile 3-6 from the Command Center, not on/next to ore or another building).
+  - Idle workers gather, spread across visible deposits by distance + current load.
+  - Command Center trains workers up to 10 (max 2 queued), pausing while saving for the Barracks.
+  - Each completed Barracks trains Soldiers continuously (max 2 queued).
+  - Once 6 Soldiers exist, idle Soldiers attack the closest visible enemy, or attack-move to the first living opponent's start position (map center as fallback).
+  - Added `TestBot::update_state(state)` to feed each tick's state, since `Bot::decide` takes no state.
+  - `enemy_base` now returns a single `PositionDto` instead of a `Vec`.
+  - Uses the existing `CommandRequest` helpers (`build`, `gather`, `produce`, `attack`, `attack_move`) and `GameStateDto` filters (`my_units`, `my_buildings`, `enemy_units`, `enemy_buildings`).
+
+### Fixed
+
+- `spend` returned the opposite of affordability (`resources < cost`); it now returns true only when affordable and deducts the cost.
+- Barracks retry check compared `barracks_ordered_at > 40` instead of ticks elapsed since the last order.
+- Barracks cost was deducted twice when building.
+- `barracks_ordered_at` started at `0`, delaying the first Barracks by 40 ticks; it now starts at `-1000`, as in the Python bot.
+
+### Known gaps (not yet changed)
+
+- ~~`Bot::decide` should take `&GameStateDto` instead of reading stored state (`src/logic/shared.rs`).~~ Done in Step 1.
+- ~~The Join Game loop in `src/ui/console.rs` never creates a bot, calls `decide`, or submits commands.~~ Done in Step 2.
+- ~~Creating a match doesn't seat/play the bot directly; check whether a separate join is needed.~~ Done in Step 3.
+- ~~View Results is a placeholder; should call `get_result` and print scores.~~ Done in Step 4.
+- ~~CLI flags (`--vs`, `--create`, `--join`, `--players`, `--tick-ms`, `--max-ticks`, `--seed`) aren't wired into the menu; match settings are hardcoded.~~ Done in Step 5.
+- ~~`main.rs` exits without a key instead of registering via `register_bot`.~~ Done in Step 6.
+- ~~`Bot::building_cost` takes `RulesDto` by value; `&RulesDto` would be easier to reuse.~~ Done in Step 7.

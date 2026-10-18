@@ -5,6 +5,7 @@ pub mod ui;
 use crate::logic::api::Api;
 use crate::ui::{console::MenuContext, startup::Args};
 use std::collections::HashMap;
+use std::io;
 
 #[tokio::main]
 async fn main() {
@@ -13,50 +14,59 @@ async fn main() {
 
     let bot_keys: HashMap<String, String> = std::env::vars().collect();
 
-    let mut name: String = "".to_string();
+    let name = args.name.clone().unwrap_or_default();
 
+    // Key lookup order: --key / NETRTS_API_KEY, then an env var named after the bot, then register.
     let key = match args.key.clone() {
-        Some(key_val) => Some(key_val),
+        Some(key_val) => key_val,
         None => {
-            let bot_name = match args.name {
-                Some(name) => name,
-                None => {
-                    eprint!("Not bot name or key provided");
-                    std::process::exit(1);
-                }
-            };
+            if name.is_empty() {
+                eprintln!("pass --name to register, or --key / NETRTS_API_KEY");
+                std::process::exit(1);
+            }
 
-            name = bot_name.clone();
-
-            bot_keys
-                .get(&bot_name)
-                .or_else(|| bot_keys.get(&bot_name))
-                .cloned()
+            match bot_keys.get(&name) {
+                Some(key_val) => key_val.clone(),
+                None => register(&name, &args.server).await,
+            }
         }
     };
 
-    match key {
-        Some(val) => {
-            let api = Api::new(name, &args.server, val);
+    let api = Api::new(name, &args.server, key);
 
-            let mut menu = MenuContext::new(api);
+    let mut menu = MenuContext::new(api, args);
 
-            match menu.ui_loop().await {
-                Ok(_) => {
-                    std::process::exit(0);
-                }
-                Err(code) => {
-                    eprint!("Error: {}", code);
-                    std::process::exit(1);
-                }
-            }
+    match menu.ui_loop().await {
+        Ok(_) => {
+            std::process::exit(0);
         }
-        None => {
-            eprintln!(
-                "Failed to initialize: No explicit key passed, and no matching bot name found in environment."
-            );
+        Err(code) => {
+            eprint!("Error: {}", code);
             std::process::exit(1);
         }
     }
 }
 
+/// Registers `name` as a new player and returns its API key, exiting on failure.
+async fn register(name: &str, server: &str) -> String {
+    // No key yet: the Authorization header is skipped while the key is empty.
+    let api = Api::new(name.to_string(), server, "");
+
+    match api.register_bot(name).await {
+        Ok(reg) => {
+            println!("\nRegistered '{}'. API key (shown once - save it!):\n  {}\n", reg.name, reg.api_key);
+            println!("Add it to .env as {}={} to reuse it next time.", reg.name, reg.api_key);
+            println!("Press [Enter] to continue...");
+            let _ = io::stdin().read_line(&mut String::new());
+            reg.api_key
+        }
+        Err(e) if e.code() == Some("NAME_TAKEN") => {
+            eprintln!("'{name}' is already registered - pass its --key, or choose another --name.");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Failed to register '{name}': {e}");
+            std::process::exit(1);
+        }
+    }
+}

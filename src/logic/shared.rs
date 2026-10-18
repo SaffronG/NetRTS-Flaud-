@@ -2,16 +2,17 @@ use crate::logic::models::{BuildingType, *};
 use std::collections::HashMap;
 
 pub trait Bot {
-    fn decide(&mut self) -> Vec<CommandRequest>;
+    /// Returns the commands to send for the tick described by `state`.
+    fn decide(&mut self, state: &GameStateDto) -> Vec<CommandRequest>;
 
-    fn building_cost(r: RulesDto) -> HashMap<BuildingType, i32> {
+    fn building_cost(r: &RulesDto) -> HashMap<BuildingType, i32> {
         r.buildings.iter().fold(HashMap::new(), |mut acc, b| {
             acc.insert(b.kind, b.cost);
             acc
         })
     }
 
-    fn new(s: GameStateDto, m: MapDto, r: RulesDto) -> Self;
+    fn new(m: MapDto, r: RulesDto) -> Self;
 }
 
 /// Chebyshev distance: source (x, y), target (x, y)
