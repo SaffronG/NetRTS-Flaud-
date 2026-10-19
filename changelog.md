@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-18 23:58:47 MDT — Switchable bot logic
+
+### Added
+
+- `src/bots/mod.rs`: added `BotLogic` (`Test`, `Flaud`, `Rustala`; default `Test`) with `ALL`, `name()`, and `parse()`, which accepts a 1-based menu number or a case-insensitive name.
+- `src/ui/console.rs`: new **Change Logic** menu item (option 4). It lists the logics and asks for a number or name; unknown input prints an error and keeps the current logic. The menu header shows the current choice as `Logic: <name>`.
+- `src/ui/console.rs`: added `MenuContext::play_selected()`, which runs `play_match` with the selected logic. Create Game and Join Game now use it instead of always playing `TestBot`.
+- `src/bots/flaud.rs`, `src/bots/rustala.rs`: `Flaud` and `RustalaDaora` now implement `Bot` as placeholders that send no commands (marked `TODO`), so they can be selected before their strategies are written.
+
+### Tests
+
+- `src/bots/mod.rs`: `BotLogic` tests for the default, `ALL` listing every variant once, names, parsing by number and by name in any case, and rejecting out-of-range or unknown input.
+- `src/bots/mod.rs`: added a test-only `fixtures` module (`map()`, `rules()`, `state()`) for building bots without a server.
+- `src/bots/flaud.rs`, `src/bots/rustala.rs`: tests that the placeholder bots send no commands.
+- `src/ui/console.rs`: tests that the menu starts on the default logic, the cursor can reach Change Logic, and the cursor stays within the menu at both ends.
+
 ## 2026-10-18 16:09:29 MDT — Menu header labels and README
 
 ### Fixed

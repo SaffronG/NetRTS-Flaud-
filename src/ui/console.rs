@@ -1,3 +1,6 @@
+use crate::bots::BotLogic;
+use crate::bots::flaud::Flaud;
+use crate::bots::rustala::RustalaDaora;
 use crate::bots::test_bot::TestBot;
 use crate::logic::api::Api;
 use crate::logic::models::*;
@@ -10,7 +13,7 @@ use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use std::io::{self, Write, stdout};
 
-const MENU_ITEMS: usize = 4;
+const MENU_ITEMS: usize = 5;
 
 struct TerminalGuard;
 
@@ -34,6 +37,8 @@ pub struct MenuContext {
     client: Api,
     /// Command-line options: match mode (`--vs` / `--create` / `--join`) and settings.
     args: Args,
+    /// Bot implementation used for the next match.
+    logic: BotLogic,
 }
 
 impl MenuContext {
@@ -42,6 +47,7 @@ impl MenuContext {
             cursor_pos: 0,
             client: c,
             args,
+            logic: BotLogic::default(),
         }
     }
 
@@ -124,7 +130,7 @@ impl MenuContext {
                 }
 
                 // The creator already holds a seat, so play straight away (no join).
-                self.play_match::<TestBot>().await?;
+                self.play_selected().await?;
             }
             1 => {
                 let label = match &self.args.join {
@@ -156,7 +162,7 @@ impl MenuContext {
                     }
                 }
 
-                self.play_match::<TestBot>().await?;
+                self.play_selected().await?;
             },
             2 => {
                 let Some(input) = Self::prompt("Enter match id (blank for last match): ")? else {
@@ -189,9 +195,35 @@ impl MenuContext {
                     _ => Self::line(&format!("No API key found in env var {bot_name:?}"), true)?,
                 }
             }
+            4 => {
+                for (i, l) in BotLogic::ALL.iter().enumerate() {
+                    Self::line(&format!("  {}) {}", i + 1, l.name()), false)?;
+                }
+                let Some(input) = Self::prompt("Enter logic number or name: ")? else {
+                    Self::line("Cancelled.", true)?;
+                    return Ok(());
+                };
+                match BotLogic::parse(&input) {
+                    Some(logic) => {
+                        self.logic = logic;
+                        Self::line(&format!("Set bot logic to: {}", logic.name()), false)?;
+                    }
+                    None => Self::line(&format!("Unknown logic {input:?}"), true)?,
+                }
+            }
             _ => (),
         }
         Ok(())
+    }
+
+    /// Plays the current match with whichever logic is selected.
+    async fn play_selected(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::line(&format!("Playing with {}", self.logic.name()), false)?;
+        match self.logic {
+            BotLogic::Test => self.play_match::<TestBot>().await,
+            BotLogic::Flaud => self.play_match::<Flaud>().await,
+            BotLogic::Rustala => self.play_match::<RustalaDaora>().await,
+        }
     }
 
     /// Waits for the current match to start, then runs bot `B` every tick until it ends.
@@ -373,16 +405,53 @@ impl MenuContext {
         Self::clear_screen()?;
 
         print!(
-            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n\r\n",
+            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\nLogic: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n[{}] Change Logic\r\n\r\n",
             self.client.bot_name.to_string().yellow(),
             self.client.server.to_string().blue(),
             Self::mask_key(&self.client.api_key).green(),
+            self.logic.name().magenta(),
             self.is_selected(0).green(),
             self.is_selected(1).green(),
             self.is_selected(2).green(),
             self.is_selected(3).green(),
+            self.is_selected(4).green(),
         );
 
         stdout().flush()
+    }
+}
+#[cfg(test)]
+mod console_tests {
+    use super::*;
+
+    fn menu() -> MenuContext {
+        let args = <Args as clap::Parser>::parse_from(["bot"]);
+        MenuContext::new(Api::new("bot".to_string(), "http://localhost:0", "key"), args)
+    }
+
+    #[test]
+    fn starts_with_default_logic() {
+        assert_eq!(menu().logic, BotLogic::default());
+    }
+
+    #[test]
+    fn cursor_reaches_change_logic_item() {
+        let mut m = menu();
+        for _ in 0..MENU_ITEMS {
+            m.move_cursor(1);
+        }
+        assert_eq!(m.cursor_pos, 4);
+        assert_eq!(m.is_selected(4), "->");
+    }
+
+    #[test]
+    fn cursor_clamps_at_both_ends() {
+        let mut m = menu();
+        m.move_cursor(-1);
+        assert_eq!(m.cursor_pos, 0);
+        for _ in 0..10 {
+            m.move_cursor(1);
+        }
+        assert_eq!(m.cursor_pos, MENU_ITEMS - 1);
     }
 }
