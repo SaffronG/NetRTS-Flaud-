@@ -4,7 +4,6 @@ use crate::logic::shared::Bot;
 pub struct Flaud {}
 
 impl Bot for Flaud {
-    // TODO: real strategy; idles for now
     fn decide(&mut self, _s: &GameStateDto) -> Vec<CommandRequest> {
         Vec::new()
     }
@@ -14,16 +13,13 @@ impl Bot for Flaud {
     }
 }
 
+impl Flaud {}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod flaud_tests {
     use super::*;
     use crate::bots::fixtures;
-
-    #[test]
-    fn initial_setup() {
-        assert!(true);
-    }
 
     #[test]
     fn stub_sends_no_commands() {
