@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-21 17:48:24 MDT — Heat map tests
+
+### Tests
+
+- `src/logic/shared.rs`: tests that `encode_threat` and `encode_sugar` find threats and resources separately. With an enemy and a deposit in different places, the threat map is hottest on the enemy and the sugar map on the deposit, and each map reads 0 at the other's source.
+- `src/logic/shared.rs`: `encode_threat` tests. Own units are ignored and a map with no enemies is all zeros. A single enemy peaks at 1.0 on its cell and fades with distance. Enemies far apart both show up at 1.0 with a cold gap between them. Enemies close together are hottest in the cells between them (three cells tie, since each is Chebyshev distance 1 from both).
+- `src/logic/shared.rs`: `encode_sugar` tests. A map with no deposits is all zeros even with units on it. Deposits are weighted by `remaining` (100 reads 1.0 and 50 reads 0.5), and empty deposits add nothing.
+- `src/logic/shared.rs`: `region_map` tests. Each cell gets the `STIMULI_LOOKUP` value for its Chebyshev distance and cells beyond `R` stay at zero. Values scale with the weight. Sources on every corner of a map smaller than `R` stay in bounds. Overlapping sources add together. The map is laid out row by row (`y * w + x`).
+- `src/logic/shared.rs`: `normalize` tests. The highest value becomes 1.0 and the others keep their ratios. An all-zero map stays at zero (no NaN), and an empty map is handled.
+- `src/logic/shared.rs`: added test helpers `unit`, `deposit`, `state` (built on `bots::fixtures::state()`), `at`, and `peak`.
+
 ## 2026-10-18 23:58:47 MDT — Switchable bot logic
 
 ### Added
