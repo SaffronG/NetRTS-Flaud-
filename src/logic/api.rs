@@ -202,6 +202,36 @@ impl Api {
             .await
     }
 
+    /// Lists the matches the server has in memory (`GET /api/v1/matches`):
+    /// waiting, running, or recently finished.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// for m in api.list_matches().await? {
+    ///     println!("{} {:?}", m.match_id, m.name);
+    /// }
+    /// ```
+    pub async fn list_matches(&self) -> ApiResult<Vec<MatchSummaryDto>> {
+        self.send(self.client.get(self.url("api/v1/matches"))).await
+    }
+
+    /// Finds the id of the match called `name` (case-insensitive), preferring
+    /// one that is still waiting for players. Returns `None` if no match has
+    /// that name.
+    pub async fn find_match_by_name(&self, name: &str) -> ApiResult<Option<String>> {
+        let matches = self.list_matches().await?;
+        let named: Vec<&MatchSummaryDto> = matches
+            .iter()
+            .filter(|m| m.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+            .collect();
+        Ok(named
+            .iter()
+            .find(|m| m.status == MatchStatus::Waiting)
+            .or(named.first())
+            .map(|m| m.match_id.clone()))
+    }
+
     /// Joins the open match `match_id` (`POST /api/v1/matches/{id}/join`).
     ///
     /// # Errors
@@ -646,6 +676,42 @@ mod tests {
             .await;
 
         assert_eq!(api(&server).join_match("m1").await.unwrap().match_id, "m1");
+    }
+
+    #[tokio::test]
+    async fn list_matches_parses_names() {
+        let server = MockServer::start().await;
+        let mut named = summary_json("m1");
+        named["name"] = json!("PostFallBreak");
+        Mock::given(method("GET"))
+            .and(path("/api/v1/matches"))
+            .respond_with(ok(json!([named, summary_json("m2")])))
+            .mount(&server)
+            .await;
+
+        let matches = api(&server).list_matches().await.unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].name.as_deref(), Some("PostFallBreak"));
+        assert_eq!(matches[1].name, None);
+    }
+
+    #[tokio::test]
+    async fn find_match_by_name_prefers_waiting_and_ignores_case() {
+        let server = MockServer::start().await;
+        let mut done = summary_json("old");
+        done["name"] = json!("Scrim");
+        done["status"] = json!("Completed");
+        let mut open = summary_json("new");
+        open["name"] = json!("Scrim");
+        Mock::given(method("GET"))
+            .and(path("/api/v1/matches"))
+            .respond_with(ok(json!([done, open])))
+            .mount(&server)
+            .await;
+
+        let api = api(&server);
+        assert_eq!(api.find_match_by_name("scrim").await.unwrap().as_deref(), Some("new"));
+        assert_eq!(api.find_match_by_name("missing").await.unwrap(), None);
     }
 
     #[tokio::test]

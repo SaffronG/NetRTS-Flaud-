@@ -27,6 +27,15 @@ cargo run -- --name Flaud
 
 The server defaults to `http://localhost:5080`; change it with `--server` or `NETRTS_SERVER`.
 
+### Docker
+
+The image points at `https://netrts.snowse.io`. Keys come from `.env` (Docker keeps quotes literally, so write `Flaud=KEY`, not `Flaud="KEY"`):
+
+``` shell
+docker build -t netrts-flaud .
+docker run --rm -it --env-file .env netrts-flaud --name Flaud
+```
+
 ### Menu
 
 Use the arrow keys (or `w`/`s`, `k`/`j`) and Enter. `q` or Esc quits.
@@ -34,7 +43,7 @@ Use the arrow keys (or `w`/`s`, `k`/`j`) and Enter. `q` or Esc quits.
 | Option | What it does |
 | --- | --- |
 | Create Game | Creates a match (see the options below) and plays it straight away, then prints the result. |
-| Join Game | Asks for a match id (blank uses `--join`), joins it, plays it, then prints the result. |
+| Join Game | Asks for a match name or id (blank uses `--join`), joins it, plays it, then prints the result. A name is looked up in the server's match list, preferring one still waiting for players. |
 | View Results | Asks for a match id (blank uses the last match) and prints the winner and each player's scores. |
 | Change Bot | Asks for a bot name and loads its key from the environment variable of that name. |
 

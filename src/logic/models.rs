@@ -192,6 +192,9 @@ pub struct MatchSummaryDto {
     pub outcome: Option<MatchOutcomeDto>,
     #[serde(default)]
     pub players: Vec<MatchPlayerDto>,
+    /// The name given when the match was created, if any.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

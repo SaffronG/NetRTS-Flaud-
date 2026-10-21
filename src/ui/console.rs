@@ -134,21 +134,34 @@ impl MenuContext {
             }
             1 => {
                 let label = match &self.args.join {
-                    Some(id) => format!("Enter match id to join (blank for {id}): "),
-                    None => "Enter match id to join: ".to_string(),
+                    Some(id) => format!("Enter match name or id to join (blank for {id}): "),
+                    None => "Enter match name or id to join: ".to_string(),
                 };
                 let Some(input) = Self::prompt(&label)? else {
                     Self::line("Cancelled.", true)?;
                     return Ok(());
                 };
-                let match_id = match (input.is_empty(), &self.args.join) {
+                let input = match (input.is_empty(), &self.args.join) {
                     (true, Some(id)) => id.clone(),
                     _ => input,
                 };
-                if match_id.is_empty() {
-                    Self::line("No match id given.", true)?;
+                if input.is_empty() {
+                    Self::line("No match name or id given.", true)?;
                     return Ok(());
                 }
+
+                // A name is looked up in the server's match list; anything unknown is tried as an id.
+                let match_id = match self.client.find_match_by_name(&input).await {
+                    Ok(Some(id)) => {
+                        Self::line(&format!("Found match '{}' ({})", input, id), false)?;
+                        id
+                    }
+                    Ok(None) => input,
+                    Err(err) => {
+                        Self::line(&format!("Couldn't list matches ({}), trying '{}' as an id", err, input), true)?;
+                        input
+                    }
+                };
 
                 Self::line("\r\nJoining Game...", false)?;
                 match self.client.join_match(&match_id).await {
