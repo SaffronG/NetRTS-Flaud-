@@ -54,8 +54,12 @@ fn normalize(map: &mut [f64]) {
 pub fn encode_threat(s: &GameStateDto) -> Vec<f64> {
     let (w, h) = (s.map_width as i32, s.map_height as i32);
     let mut map = vec![0.0; (w * h) as usize];
-    for u in s.enemy_units() {
+    // Workers are prey, not threats
+    for u in s.enemy_units().filter(|u| u.kind != UnitType::Worker) {
         region_map(&mut map, w, h, u.x, u.y, UNIT_WEIGHT);
+    }
+    for b in s.enemy_buildings().filter(|b| b.kind == BuildingType::GuardTower) {
+        region_map(&mut map, w, h, b.x, b.y, UNIT_WEIGHT);
     }
     normalize(&mut map);
     map
@@ -272,6 +276,69 @@ mod tests {
         assert_eq!(peak(&map, w).0, 11);
         assert!(at(&map, w, 10, 5) < 1.0);
         assert!(at(&map, w, 12, 5) < 1.0);
+    }
+
+    fn building(id: i32, kind: BuildingType, owner: i32, x: i32, y: i32) -> BuildingDto {
+        BuildingDto {
+            id,
+            kind,
+            owner,
+            x,
+            y,
+            hp: 100,
+            max_hp: 100,
+            completed: true,
+            construction_percent: 100,
+            production: vec![],
+            rally: None,
+            research: None,
+        }
+    }
+
+    #[test]
+    fn threat_map_ignores_enemy_workers() {
+        // Workers are prey, not threats; counting them would cancel the pull toward them
+        let (w, h) = (40, 10);
+        let mut worker = unit(1, ENEMY, 30, 5);
+        worker.kind = UnitType::Worker;
+        let s = state(w, h, vec![unit(2, ENEMY, 5, 5), worker], vec![]);
+        let map = encode_threat(&s);
+        assert!(approx(at(&map, w, 5, 5), 1.0));
+        assert_eq!(at(&map, w, 30, 5), 0.0);
+    }
+
+    #[test]
+    fn threat_map_counts_every_combat_unit_type() {
+        let (w, h) = (80, 10);
+        let kinds = [UnitType::Soldier, UnitType::Archer, UnitType::Scout];
+        let units = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let mut u = unit(i as i32, ENEMY, 5 + 25 * i as i32, 5);
+                u.kind = *k;
+                u
+            })
+            .collect();
+        let map = encode_threat(&state(w, h, units, vec![]));
+        for i in 0..kinds.len() as i32 {
+            assert!(at(&map, w, 5 + 25 * i, 5) > 0.0, "{:?}", kinds[i as usize]);
+        }
+    }
+
+    #[test]
+    fn threat_map_includes_enemy_guard_towers_only() {
+        let (w, h) = (60, 10);
+        let mut s = state(w, h, vec![], vec![]);
+        s.buildings = vec![
+            building(1, BuildingType::GuardTower, ENEMY, 5, 5),
+            building(2, BuildingType::Barracks, ENEMY, 30, 5),
+            building(3, BuildingType::GuardTower, ME, 54, 5),
+        ];
+        let map = encode_threat(&s);
+        assert!(approx(at(&map, w, 5, 5), 1.0), "enemy tower is a threat");
+        assert_eq!(at(&map, w, 30, 5), 0.0, "barracks can't shoot");
+        assert_eq!(at(&map, w, 54, 5), 0.0, "own tower is not a threat");
     }
 
     // --- encode_sugar ---

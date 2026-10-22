@@ -3,7 +3,7 @@ use crate::logic::{neurons::*, sensory::*};
 pub struct FlyBrainConnectome {
     pub sensory: SensoryLayer,
     pub motor_neurons: Vec<LifNeuron>,
-    pub weights: Vec<[f32; 2]>,
+    pub weights: Vec<[f32; SENSES]>,
     // Map bias and actions 1:1 to the motor_neurons
     pub bias: Vec<f32>,
     pub actions: Vec<MotorAction>,
@@ -11,7 +11,7 @@ pub struct FlyBrainConnectome {
 
 impl FlyBrainConnectome {
     pub fn new(
-        weights: Vec<[f32; 2]>,
+        weights: Vec<[f32; SENSES]>,
         decay: f32,
         threshold: f32,
         bias: Vec<f32>,
@@ -25,10 +25,7 @@ impl FlyBrainConnectome {
         );
 
         Self {
-            sensory: SensoryLayer {
-                vision_neurons: vec![LifNeuron::new(decay, threshold)],
-                olfactory_neurons: vec![LifNeuron::new(decay, threshold)],
-            },
+            sensory: SensoryLayer::new(decay, threshold),
             motor_neurons: vec![LifNeuron::new(decay, threshold); weights.len()],
             weights,
             bias,
@@ -36,9 +33,9 @@ impl FlyBrainConnectome {
         }
     }
 
-    pub fn tick(&mut self, threat: f32, sugar: f32) -> MotorAction {
-        let (saw, smelled) = self.sensory.encode_stimuli(threat, sugar);
-        let spikes = [f32::from(saw), f32::from(smelled)]; // bool → 1.0 / 0.0
+    /// `senses` is indexed by `THREAT`, `SUGAR`, `PREY`, `WEALTH`.
+    pub fn tick(&mut self, senses: [f32; SENSES]) -> MotorAction {
+        let spikes = self.sensory.encode_stimuli(senses).map(f32::from); // bool → 1.0 / 0.0
 
         let mut fired: Option<MotorAction> = None;
         let mut count = 0;
@@ -65,6 +62,7 @@ impl FlyBrainConnectome {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MotorAction {
     Attack,
+    Build,
     Explore,
     Gather,
     HoldPosition,
@@ -80,7 +78,7 @@ mod connectome_tests {
 
     fn brain(rows: usize) -> FlyBrainConnectome {
         FlyBrainConnectome::new(
-            vec![[0.5, -0.5]; rows],
+            vec![[0.5, -0.5, 0.0, 0.0]; rows],
             DECAY,
             THRESHOLD,
             vec![0.0; rows],
@@ -89,7 +87,7 @@ mod connectome_tests {
     }
 
     /// One motor neuron per `(weights, bias, action)`.
-    fn wired(motors: &[([f32; 2], f32, MotorAction)]) -> FlyBrainConnectome {
+    fn wired(motors: &[([f32; SENSES], f32, MotorAction)]) -> FlyBrainConnectome {
         FlyBrainConnectome::new(
             motors.iter().map(|m| m.0).collect(),
             DECAY,
@@ -100,11 +98,7 @@ mod connectome_tests {
     }
 
     fn all_neurons(b: &FlyBrainConnectome) -> impl Iterator<Item = &LifNeuron> {
-        b.sensory
-            .vision_neurons
-            .iter()
-            .chain(&b.sensory.olfactory_neurons)
-            .chain(&b.motor_neurons)
+        b.sensory.neurons.iter().chain(&b.motor_neurons)
     }
 
     // --- new ---
@@ -117,15 +111,40 @@ mod connectome_tests {
     }
 
     #[test]
-    fn new_builds_one_vision_and_one_smell_neuron() {
-        let b = brain(2);
-        assert_eq!(b.sensory.vision_neurons.len(), 1);
-        assert_eq!(b.sensory.olfactory_neurons.len(), 1);
+    fn new_builds_one_neuron_per_sense() {
+        assert_eq!(brain(2).sensory.neurons.len(), SENSES);
+    }
+
+    #[test]
+    fn tick_reads_each_sense_from_its_own_column() {
+        // Each motor listens to exactly one sense; only the sense that is fed should act
+        let actions = [
+            MotorAction::Retreat,
+            MotorAction::Gather,
+            MotorAction::Explore,
+            MotorAction::Build,
+        ];
+        for sense in [THREAT, SUGAR, PREY, WEALTH] {
+            let motors: Vec<_> = (0..SENSES)
+                .map(|m| {
+                    let mut w = [0.0; SENSES];
+                    w[m] = THRESHOLD;
+                    (w, 0.0, actions[m])
+                })
+                .collect();
+            let mut input = [0.0; SENSES];
+            input[sense] = 1.0;
+            assert_eq!(wired(&motors).tick(input), actions[sense], "sense {sense}");
+        }
     }
 
     #[test]
     fn new_keeps_weights_in_order() {
-        let w = vec![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
+        let w = vec![
+            [1.0, 2.0, 0.0, 0.0],
+            [3.0, 4.0, 0.0, 0.0],
+            [5.0, 6.0, 0.0, 0.0],
+        ];
         let b = FlyBrainConnectome::new(
             w.clone(),
             DECAY,
@@ -177,10 +196,10 @@ mod connectome_tests {
         let (mut a, b) = (brain(2), brain(2));
         // Two ticks stays under threshold, so the voltage isn't reset by a spike
         for _ in 0..2 {
-            a.sensory.encode_stimuli(0.1, 0.1);
+            a.sensory.encode_stimuli([0.1, 0.1, 0.0, 0.0]);
             a.motor_neurons[0].update(0.5);
         }
-        assert!(a.sensory.vision_neurons[0].voltage > 0.0);
+        assert!(a.sensory.neurons[THREAT].voltage > 0.0);
         assert!(all_neurons(&b).all(|n| n.voltage == 0.0));
     }
 
@@ -188,17 +207,17 @@ mod connectome_tests {
     fn brain_remembers_voltage_between_ticks() {
         // A weak stimulus stays below threshold for one tick but builds up
         // over several, which only works if the brain is kept between ticks.
-        // Assumes VISION_GAIN * 0.1 < THRESHOLD.
+        // Assumes GAINS[THREAT] * 0.1 < THRESHOLD.
         let mut b = brain(2);
-        let (first, _) = b.sensory.encode_stimuli(0.1, 0.0);
+        let first = b.sensory.encode_stimuli([0.1, 0.0, 0.0, 0.0])[THREAT];
         assert!(!first, "one weak tick should not spike");
-        let v1 = b.sensory.vision_neurons[0].voltage;
+        let v1 = b.sensory.neurons[THREAT].voltage;
 
-        b.sensory.encode_stimuli(0.1, 0.0);
-        let v2 = b.sensory.vision_neurons[0].voltage;
+        b.sensory.encode_stimuli([0.1, 0.0, 0.0, 0.0]);
+        let v2 = b.sensory.neurons[THREAT].voltage;
         assert!(v2 > v1, "voltage carried over: {v1} -> {v2}");
 
-        let spiked = (0..20).any(|_| b.sensory.encode_stimuli(0.1, 0.0).0);
+        let spiked = (0..20).any(|_| b.sensory.encode_stimuli([0.1, 0.0, 0.0, 0.0])[THREAT]);
         assert!(spiked, "repeated weak input should eventually spike");
     }
 
@@ -215,7 +234,7 @@ mod connectome_tests {
     #[should_panic(expected = "bias")]
     fn new_rejects_mismatched_bias() {
         FlyBrainConnectome::new(
-            vec![[0.0, 0.0]; 2],
+            vec![[0.0; SENSES]; 2],
             DECAY,
             THRESHOLD,
             vec![0.0],
@@ -227,7 +246,7 @@ mod connectome_tests {
     #[should_panic(expected = "action")]
     fn new_rejects_mismatched_actions() {
         FlyBrainConnectome::new(
-            vec![[0.0, 0.0]; 2],
+            vec![[0.0; SENSES]; 2],
             DECAY,
             THRESHOLD,
             vec![0.0; 2],
@@ -239,53 +258,65 @@ mod connectome_tests {
 
     #[test]
     fn tick_holds_when_nothing_fires() {
-        let mut b = wired(&[([0.0, 0.0], 0.0, MotorAction::Attack)]);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::HoldPosition);
+        let mut b = wired(&[([0.0; SENSES], 0.0, MotorAction::Attack)]);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::HoldPosition);
     }
 
     #[test]
     fn tick_fires_on_bias_alone() {
         // A bias at threshold fires with no senses at all, as a bored scout should
-        let mut b = wired(&[([0.0, 0.0], THRESHOLD, MotorAction::Explore)]);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::Explore);
+        let mut b = wired(&[([0.0; SENSES], THRESHOLD, MotorAction::Explore)]);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Explore);
     }
 
     #[test]
     fn tick_returns_action_of_the_only_neuron_that_fired() {
         let mut b = wired(&[
-            ([0.0, 0.0], 0.0, MotorAction::Gather),
-            ([0.0, 0.0], THRESHOLD, MotorAction::Attack),
-            ([0.0, 0.0], 0.0, MotorAction::Retreat),
+            ([0.0; SENSES], 0.0, MotorAction::Gather),
+            ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], 0.0, MotorAction::Retreat),
         ]);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::Attack);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
     }
 
     #[test]
     fn tick_holds_on_a_tie() {
         let mut b = wired(&[
-            ([0.0, 0.0], THRESHOLD, MotorAction::Attack),
-            ([0.0, 0.0], THRESHOLD, MotorAction::Gather),
+            ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], THRESHOLD, MotorAction::Gather),
         ]);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::HoldPosition);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::HoldPosition);
     }
 
     #[test]
     fn tick_reads_weights_as_motor_rows_sensor_columns() {
-        // Column 0 is vision, column 1 is smell. A transposed lookup swaps these.
+        // Column THREAT is vision, column SUGAR is smell. A transposed lookup swaps these.
         let motors = [
-            ([THRESHOLD, 0.0], 0.0, MotorAction::Retreat), // listens to vision only
-            ([0.0, THRESHOLD], 0.0, MotorAction::Gather),  // listens to smell only
+            ([THRESHOLD, 0.0, 0.0, 0.0], 0.0, MotorAction::Retreat), // listens to threat only
+            ([0.0, THRESHOLD, 0.0, 0.0], 0.0, MotorAction::Gather),  // listens to sugar only
         ];
-        assert_eq!(wired(&motors).tick(1.0, 0.0), MotorAction::Retreat);
-        assert_eq!(wired(&motors).tick(0.0, 1.0), MotorAction::Gather);
+        assert_eq!(
+            wired(&motors).tick([1.0, 0.0, 0.0, 0.0]),
+            MotorAction::Retreat
+        );
+        assert_eq!(
+            wired(&motors).tick([0.0, 1.0, 0.0, 0.0]),
+            MotorAction::Gather
+        );
     }
 
     #[test]
     fn tick_negative_weight_suppresses_bias() {
         // Exploring stops once a threat is seen
-        let motors = [([-THRESHOLD, 0.0], THRESHOLD, MotorAction::Explore)];
-        assert_eq!(wired(&motors).tick(0.0, 0.0), MotorAction::Explore);
-        assert_eq!(wired(&motors).tick(1.0, 0.0), MotorAction::HoldPosition);
+        let motors = [([-THRESHOLD, 0.0, 0.0, 0.0], THRESHOLD, MotorAction::Explore)];
+        assert_eq!(
+            wired(&motors).tick([0.0, 0.0, 0.0, 0.0]),
+            MotorAction::Explore
+        );
+        assert_eq!(
+            wired(&motors).tick([1.0, 0.0, 0.0, 0.0]),
+            MotorAction::HoldPosition
+        );
     }
 
     #[test]
@@ -293,14 +324,14 @@ mod connectome_tests {
         // Motor 0 fires every tick. If the loop stopped at the first spike,
         // motor 1 would never charge.
         let mut b = wired(&[
-            ([0.0, 0.0], THRESHOLD, MotorAction::Attack),
-            ([0.0, 0.0], 0.5, MotorAction::Gather),
+            ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], 0.5, MotorAction::Gather),
         ]);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::Attack);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
         assert!((b.motor_neurons[1].voltage - 0.5).abs() < 1e-6);
 
         // 0.5 -> 0.95 -> 1.355 fires on tick 3, tying with motor 0
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::Attack);
-        assert_eq!(b.tick(0.0, 0.0), MotorAction::HoldPosition);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::HoldPosition);
     }
 }

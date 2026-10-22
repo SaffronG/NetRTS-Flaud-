@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-21 22:45:52 MDT — Step 5: role brains with four senses
+
+### Added
+
+- `src/bots/flaud.rs`: role brains `worker_brain()`, `army_brain()` and `scout_brain()`, with `DECAY = 0.8` and `THRESHOLD = 1.0`. Weight rows are `[threat, sugar, prey, wealth]`. Any action with a threat weight of -1.0 or stronger can't fire while a threat is in view.
+  - Worker: Retreat once threat stays above about 0.11, Gather drawn to sugar (its bias keeps workers gathering even far from deposits), and Build when rich and safe.
+  - Army: Attack on the first vision spike, and Explore toward prey (enemy workers and buildings), but never while fighting.
+  - Scout: Retreat, more fearful than a worker, and Explore when calm (from its bias) and sooner toward prey, but never into danger.
+- `src/logic/connectome.rs`: `MotorAction::Build`.
+- `src/logic/sensory.rs`: `SENSES = 4`, the index names `THREAT`, `SUGAR`, `PREY` and `WEALTH`, a gain per sense in `GAINS`, and `SensoryLayer::new(decay, threshold)`.
+
+### Changed
+
+- `src/logic/sensory.rs`: `SensoryLayer` has one `neurons` list, one neuron per sense, in place of `vision_neurons` and `olfactory_neurons`. `encode_stimuli` takes `[f32; SENSES]` and returns `[bool; SENSES]`.
+- `src/logic/connectome.rs`: `weights` is `Vec<[f32; SENSES]>`, and `tick(senses: [f32; SENSES])` takes all four senses as one array.
+- `src/logic/shared.rs`: `encode_threat` ignores enemy workers, because they are prey and would cancel out the pull toward them, and adds enemy GuardTowers. Other buildings and your own towers are not threats.
+- `src/bots/flaud.rs`, `src/logic/connectome.rs`, `src/logic/sensory.rs`: formatted with rustfmt.
+
+### Tests
+
+- `src/bots/flaud.rs`: role behaviour tests that start a new brain and hold the same senses for 12 ticks.
+  - Worker: gathers when calm and sooner near sugar, flees danger without gathering in it, ignores a faint threat, builds when rich and calm, and never builds when poor or threatened.
+  - Army: holds when calm, attacks threat, hunts undefended prey, and doesn't wander off in the middle of a fight.
+  - Scout: explores when calm and sooner toward prey, and flees danger without exploring into it.
+- `src/logic/shared.rs`: tests that `encode_threat` ignores enemy workers, counts every enemy combat unit type, and includes only enemy GuardTowers.
+- `src/logic/connectome.rs`: updated for 4 senses, and added `tick_reads_each_sense_from_its_own_column`.
+
 ## 2026-10-21 21:28:50 MDT — Brain per group and variable motor neurons
 
 ### Added

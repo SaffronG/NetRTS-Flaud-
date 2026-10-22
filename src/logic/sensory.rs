@@ -1,17 +1,29 @@
 use crate::logic::neurons::*;
 
-const VISION_GAIN: f32 = 5.0;
-const SMELL_GAIN: f32 = 5.0;
+pub const SENSES: usize = 4;
+
+// Index of each sense in an input array or a weight row
+pub const THREAT: usize = 0;
+pub const SUGAR: usize = 1;
+pub const PREY: usize = 2;
+pub const WEALTH: usize = 3;
+
+const GAINS: [f32; SENSES] = [5.0, 5.0, 5.0, 5.0];
 
 pub struct SensoryLayer {
-    pub vision_neurons: Vec<LifNeuron>,
-    pub olfactory_neurons: Vec<LifNeuron>,
+    /// One neuron per sense, indexed by `THREAT`, `SUGAR`, `PREY`, `WEALTH`
+    pub neurons: Vec<LifNeuron>,
 }
 
 impl SensoryLayer {
-    pub fn encode_stimuli(&mut self, threat: f32, sugar: f32) -> (bool, bool) {
-        let saw = self.vision_neurons[0].update(threat * VISION_GAIN);
-        let smelled = self.olfactory_neurons[0].update(sugar * SMELL_GAIN);
-        (saw, smelled)
+    pub fn new(decay: f32, threshold: f32) -> Self {
+        Self {
+            neurons: vec![LifNeuron::new(decay, threshold); SENSES],
+        }
+    }
+
+    /// Takes heat values from 0 to 1 and returns which senses spiked.
+    pub fn encode_stimuli(&mut self, input: [f32; SENSES]) -> [bool; SENSES] {
+        std::array::from_fn(|i| self.neurons[i].update(input[i] * GAINS[i]))
     }
 }
