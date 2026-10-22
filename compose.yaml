@@ -1,0 +1,23 @@
+services:
+  flaud:
+    build: .
+    image: netrts-flaud
+    # Pick the bot with BOT_NAME (shell or .env), e.g. BOT_NAME=RustalaDaora docker compose up
+    command: ["--name", "${BOT_NAME:-Flaud}"]
+    # Bot keys from the local .env arrive as env vars of the same name.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NETRTS_SERVER: ${NETRTS_SERVER:-https://netrts.snowse.io}
+    # Run from the volume so a newly registered key is appended to /app/data/.env
+    # and survives restarts instead of being lost with the container.
+    working_dir: /app/data
+    volumes:
+      - flaud-data:/app/data
+    # The menu needs a terminal and keyboard input.
+    stdin_open: true
+    tty: true
+
+volumes:
+  flaud-data:
