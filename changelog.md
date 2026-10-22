@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-22 11:49:39 MDT — `--name` uses the `.env` key, or registers and saves one
+
+### Changed
+
+- `src/main.rs`: the API key is now found in this order: `--key` on the command line, then the `.env` entry named after `--name` (or an env var of that name, for Docker's `--env-file`), then `NETRTS_API_KEY`, then registering `--name`. Previously `NETRTS_API_KEY` came first, so a global key overrode `--name`. Clap's `value_source` tells a typed `--key` apart from one read from `NETRTS_API_KEY`.
+- `src/main.rs`: added `bot_key(env_path, name)`. It reads the `.env` file directly (`dotenvy::from_path_iter`) instead of searching every process env var, so a bot named like a system var (`Path`, `USERNAME`) no longer picks up its value. Blank values count as missing.
+- `src/main.rs`: `register(name, server, env_path)` now saves the new key to `.env` with `save_key`, which appends `name=key` to the `.env` that `dotenvy::dotenv()` found (or `./.env` if none), starting a new line if the file doesn't end with one. The key is still printed once either way (inside Docker the saved `.env` is lost with the container), and if the write fails it also prints the `.env` line to add. The key is saved under `--name`, the name it's looked up by.
+- `src/main.rs`: the `NAME_TAKEN` error now says the name has no key in `.env`, and suggests adding `name=<key>` there, passing `--key`, or choosing another `--name`.
+
+### Docs
+
+- `README.md`: updated the key lookup order and noted that a newly registered key is saved to `.env`.
+
 ## 2026-10-22 01:25:03 MDT — Step 10: Flaud trains units
 
 ### Added

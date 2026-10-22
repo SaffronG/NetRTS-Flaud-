@@ -12,14 +12,16 @@ There are three bot implementations: one is algorithm-based, the second is drive
 
 Pass a bot name with `--name`. The API key is looked up in this order:
 
-1. `--key`, or the `NETRTS_API_KEY` environment variable
-2. An environment variable (or `.env` entry) with the same name as the bot, e.g.:
+1. `--key` given on the command line
+2. A `.env` entry with the same name as the bot, e.g.:
 
    ``` .env
    Flaud="TOTALLY_REAL_API_KEY"
    ```
 
-3. If neither exists, the bot is registered on the server under that name. The new key is printed once, so add it to `.env` as shown above to reuse it. If the name is already taken, pass its `--key` or choose another `--name`.
+   If `.env` has no such entry, an environment variable with that name is used instead (this is how Docker's `--env-file` passes keys). Blank values count as missing.
+3. The `NETRTS_API_KEY` environment variable
+4. If none of these exist, the bot is registered on the server under that name and its new key is appended to `.env` as `Name=KEY`, so the next run reuses it. The key is also printed once; if `.env` can't be written, add it there by hand. If the name is already taken, add its key to `.env`, pass its `--key`, or choose another `--name`.
 
 ``` shell
 cargo run -- --name Flaud
@@ -35,6 +37,8 @@ The image points at `https://netrts.snowse.io`. Keys come from `.env` (Docker ke
 docker build -t netrts-flaud .
 docker run --rm -it --env-file .env netrts-flaud --name Flaud
 ```
+
+Inside the container a newly registered key is saved to the container's own `.env`, which is lost when it exits, so copy the key into your local `.env` yourself.
 
 ### Menu
 
