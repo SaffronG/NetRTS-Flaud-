@@ -15,6 +15,12 @@ pub const STIMULI_LOOKUP: [f64; 10] = [
 ];
 const R: i32 = (STIMULI_LOOKUP.len() - 1) as i32;
 const UNIT_WEIGHT: f64 = 1.0;
+// Prey building order: Barracks first, then CommandCenter and GuardTower close
+// behind, then everything else. Only the ratios matter after `normalize`.
+const BARRACKS_WEIGHT: f64 = 0.8;
+const CC_WEIGHT: f64 = 0.6;
+const TOWER_WEIGHT: f64 = 0.55;
+const BUILDING_WEIGHT: f64 = 0.3;
 
 pub trait Bot {
     fn decide(&mut self, state: &GameStateDto) -> Vec<CommandRequest>;
@@ -73,6 +79,65 @@ pub fn encode_sugar(s: &GameStateDto) -> Vec<f64> {
     }
     normalize(&mut map);
     map
+}
+
+fn prey_weight(kind: BuildingType) -> f64 {
+    match kind {
+        BuildingType::CommandCenter => CC_WEIGHT,
+        BuildingType::Barracks => BARRACKS_WEIGHT,
+        BuildingType::GuardTower => TOWER_WEIGHT,
+        _ => BUILDING_WEIGHT,
+    }
+}
+
+pub fn encode_prey(s: &GameStateDto) -> Vec<f64> {
+    let (w, h) = (s.map_width as i32, s.map_height as i32);
+    let mut map = vec![0.0; (w * h) as usize];
+    for u in s.enemy_units().filter(|u| u.kind == UnitType::Worker) {
+        region_map(&mut map, w, h, u.x, u.y, UNIT_WEIGHT);
+    }
+    for b in s.enemy_buildings() {
+        region_map(&mut map, w, h, b.x, b.y, prey_weight(b.kind));
+    }
+    // Enemy buildings seen before but out of sight now; skip any still visible
+    let remembered = s
+        .remembered_buildings
+        .iter()
+        .filter(|b| b.owner != s.you.slot)
+        .filter(|b| !s.buildings.iter().any(|v| v.id == b.id));
+    for b in remembered {
+        region_map(&mut map, w, h, b.x, b.y, prey_weight(b.kind));
+    }
+    normalize(&mut map);
+    map
+}
+
+/// Heat at (x, y), or 0 off the map.
+pub fn sample(map: &[f64], w: i32, h: i32, x: i32, y: i32) -> f32 {
+    if x < 0 || y < 0 || x >= w || y >= h {
+        return 0.0;
+    }
+    map[(y * w + x) as usize] as f32
+}
+
+/// Unit step (-1..=1, -1..=1) toward the hottest neighbour, or (0, 0) on a peak.
+pub fn uphill(map: &[f64], w: i32, h: i32, x: i32, y: i32) -> (i32, i32) {
+    let mut best = ((0, 0), sample(map, w, h, x, y));
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let (nx, ny) = (x + dx, y + dy);
+            // Off-map cells read 0, which would beat a negative cell
+            if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                continue;
+            }
+            let v = sample(map, w, h, nx, ny);
+            // Strictly greater, so a peak or flat ground stays put
+            if v > best.1 {
+                best = ((dx, dy), v);
+            }
+        }
+    }
+    best.0
 }
 
 pub fn dist(sx: i32, sy: i32, tx: i32, ty: i32) -> i32 {
@@ -371,6 +436,175 @@ mod tests {
 
         let empty = state(w, h, vec![], vec![deposit(1, 4, 4, 0)]);
         assert!(encode_sugar(&empty).iter().all(|v| *v == 0.0));
+    }
+
+    // --- encode_prey ---
+
+    fn remembered(id: i32, kind: BuildingType, owner: i32, x: i32, y: i32) -> RememberedBuildingDto {
+        RememberedBuildingDto {
+            id,
+            kind,
+            owner,
+            x,
+            y,
+            hp: 100,
+            max_hp: 100,
+            completed: true,
+            last_seen_tick: 0,
+        }
+    }
+
+    #[test]
+    fn prey_map_finds_enemy_workers_only() {
+        let (w, h) = (80, 10);
+        let mut enemy_worker = unit(1, ENEMY, 5, 5);
+        enemy_worker.kind = UnitType::Worker;
+        let mut own_worker = unit(2, ME, 30, 5);
+        own_worker.kind = UnitType::Worker;
+        let enemy_soldier = unit(3, ENEMY, 55, 5);
+        let s = state(w, h, vec![enemy_worker, own_worker, enemy_soldier], vec![]);
+        let map = encode_prey(&s);
+        assert!(approx(at(&map, w, 5, 5), 1.0));
+        assert_eq!(at(&map, w, 30, 5), 0.0, "own workers are not prey");
+        assert_eq!(at(&map, w, 55, 5), 0.0, "soldiers are threat, not prey");
+    }
+
+    #[test]
+    fn prey_map_ranks_barracks_then_cc_and_tower_then_others() {
+        let (w, h) = (100, 10);
+        let kinds = [
+            BuildingType::Barracks,
+            BuildingType::CommandCenter,
+            BuildingType::GuardTower,
+            BuildingType::ResourceDepot,
+        ];
+        let mut s = state(w, h, vec![], vec![]);
+        s.buildings = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, k)| building(i as i32, *k, ENEMY, 5 + 25 * i as i32, 5))
+            .collect();
+        let map = encode_prey(&s);
+        let heat: Vec<f64> = (0..4).map(|i| at(&map, w, 5 + 25 * i, 5)).collect();
+        let (barracks, cc, tower, depot) = (heat[0], heat[1], heat[2], heat[3]);
+
+        assert!(approx(barracks, 1.0), "barracks is the top target");
+        assert!(barracks > cc && cc > tower && tower > depot, "{heat:?}");
+        assert!(cc - tower < 0.1, "cc and tower are about the same: {heat:?}");
+    }
+
+    #[test]
+    fn prey_map_ignores_own_buildings() {
+        let (w, h) = (20, 10);
+        let mut s = state(w, h, vec![], vec![]);
+        s.buildings = vec![building(1, BuildingType::Barracks, ME, 5, 5)];
+        assert!(encode_prey(&s).iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn prey_map_remembers_enemy_buildings_out_of_sight() {
+        let (w, h) = (40, 10);
+        let mut s = state(w, h, vec![], vec![]);
+        s.remembered_buildings = vec![
+            remembered(1, BuildingType::CommandCenter, ENEMY, 5, 5),
+            remembered(2, BuildingType::CommandCenter, ME, 30, 5),
+        ];
+        let map = encode_prey(&s);
+        assert!(approx(at(&map, w, 5, 5), 1.0), "the army can hunt a base it saw before");
+        assert_eq!(at(&map, w, 30, 5), 0.0, "own remembered buildings are not prey");
+    }
+
+    #[test]
+    fn prey_map_does_not_double_count_visible_remembered_buildings() {
+        // Barracks 1 is both visible and remembered; barracks 2 is only visible.
+        // Counted once each, they read the same.
+        let (w, h) = (40, 10);
+        let mut s = state(w, h, vec![], vec![]);
+        s.buildings = vec![
+            building(1, BuildingType::Barracks, ENEMY, 5, 5),
+            building(2, BuildingType::Barracks, ENEMY, 30, 5),
+        ];
+        s.remembered_buildings = vec![remembered(1, BuildingType::Barracks, ENEMY, 5, 5)];
+        let map = encode_prey(&s);
+        assert!(approx(at(&map, w, 5, 5), 1.0));
+        assert!(approx(at(&map, w, 30, 5), 1.0));
+    }
+
+    // --- sample ---
+
+    #[test]
+    fn sample_reads_row_major_cell() {
+        let (w, h) = (4, 3);
+        let map: Vec<f64> = (0..12).map(f64::from).collect();
+        assert_eq!(sample(&map, w, h, 0, 0), 0.0);
+        assert_eq!(sample(&map, w, h, 3, 0), 3.0);
+        assert_eq!(sample(&map, w, h, 1, 2), 9.0);
+    }
+
+    #[test]
+    fn sample_is_zero_off_the_map() {
+        let (w, h) = (4, 3);
+        let map = vec![1.0; 12];
+        for (x, y) in [(-1, 0), (0, -1), (4, 0), (0, 3), (4, 3)] {
+            assert_eq!(sample(&map, w, h, x, y), 0.0, "({x}, {y})");
+        }
+    }
+
+    // --- uphill ---
+
+    fn peak_map(w: i32, h: i32, cx: i32, cy: i32) -> Vec<f64> {
+        let mut map = vec![0.0; (w * h) as usize];
+        region_map(&mut map, w, h, cx, cy, 1.0);
+        map
+    }
+
+    #[test]
+    fn uphill_points_toward_the_peak() {
+        // Chebyshev rings are squares, so several neighbours can tie; any of
+        // them is fine as long as each step gets one tile closer.
+        let (w, h, px, py) = (20, 12, 10, 5);
+        let map = peak_map(w, h, px, py);
+        for (x, y) in [(5, 5), (14, 5), (10, 2), (12, 7), (3, 0), (17, 11)] {
+            let (dx, dy) = uphill(&map, w, h, x, y);
+            assert_eq!(
+                dist(x + dx, y + dy, px, py),
+                dist(x, y, px, py) - 1,
+                "from ({x}, {y}) stepped ({dx}, {dy})"
+            );
+        }
+        // On a diagonal the closest neighbour is unique
+        assert_eq!(uphill(&map, w, h, 12, 7), (-1, -1));
+    }
+
+    #[test]
+    fn uphill_stays_put_on_a_peak() {
+        let (w, h) = (20, 12);
+        let map = peak_map(w, h, 10, 5);
+        assert_eq!(uphill(&map, w, h, 10, 5), (0, 0));
+    }
+
+    #[test]
+    fn uphill_stays_put_on_flat_ground() {
+        let (w, h) = (20, 12);
+        let map = vec![0.0; (w * h) as usize];
+        assert_eq!(uphill(&map, w, h, 7, 7), (0, 0));
+    }
+
+    #[test]
+    fn uphill_never_steps_off_the_map() {
+        // On an all-negative map an off-map 0 would look hotter than any cell
+        let (w, h) = (5, 5);
+        let map = vec![-1.0; 25];
+        for (x, y) in [(0, 0), (4, 0), (0, 4), (4, 4), (2, 0)] {
+            assert_eq!(uphill(&map, w, h, x, y), (0, 0), "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn uphill_climbs_from_the_edge() {
+        let (w, h) = (20, 12);
+        let map = peak_map(w, h, 3, 3);
+        assert_eq!(uphill(&map, w, h, 0, 0), (1, 1));
     }
 
     // --- both maps together ---
