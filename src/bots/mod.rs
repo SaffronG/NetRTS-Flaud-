@@ -4,8 +4,8 @@ pub mod test_bot;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BotLogic {
-    #[default]
     Test,
+    #[default]
     Flaud,
     Rustala,
 }
@@ -90,8 +90,8 @@ mod bot_logic_tests {
     use std::collections::HashSet;
 
     #[test]
-    fn default_is_test_bot() {
-        assert_eq!(BotLogic::default(), BotLogic::Test);
+    fn default_is_flaud() {
+        assert_eq!(BotLogic::default(), BotLogic::Flaud);
     }
 
     #[test]

@@ -23,8 +23,22 @@ const CC_WEIGHT: f64 = 0.6;
 const TOWER_WEIGHT: f64 = 0.55;
 const BUILDING_WEIGHT: f64 = 0.3;
 
+/// One tick's heat maps, each `w * h` long, row-major and normalised to 0..=1.
+pub struct HeatMaps {
+    pub threat: Vec<f64>,
+    pub sugar: Vec<f64>,
+    pub prey: Vec<f64>,
+    pub w: i32,
+    pub h: i32,
+}
+
 pub trait Bot {
     fn decide(&mut self, state: &GameStateDto) -> Vec<CommandRequest>;
+
+    /// The maps from the last `decide`, for the match screen. Bots without any return None.
+    fn heat_maps(&self) -> Option<&HeatMaps> {
+        None
+    }
 
     fn building_cost(r: &RulesDto) -> HashMap<BuildingType, i32> {
         r.buildings.iter().fold(HashMap::new(), |mut acc, b| {

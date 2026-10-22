@@ -4,7 +4,7 @@ use crate::logic::connectome::{FlyBrainConnectome, MotorAction};
 use crate::logic::models::*;
 use crate::logic::sensory::{PREY, SENSES, SUGAR, THREAT, WEALTH};
 use crate::logic::shared::{
-    Bot, Loc, R, dist, encode_prey, encode_sugar, encode_threat, enemy_base, find_site,
+    Bot, HeatMaps, Loc, R, dist, encode_prey, encode_sugar, encode_threat, enemy_base, find_site,
     hottest_near, sample,
 };
 
@@ -13,12 +13,12 @@ const DECAY: f32 = 0.8; // Determines that the minimum current possible to maybe
 const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 
 // Production
-const TARGET_WORKERS: usize = 12;
-const TARGET_SCOUTS: usize = 2;
+const TARGET_WORKERS: usize = 6;
+const TARGET_SCOUTS: usize = 5;
 /// Units a building may have queued before we stop adding more
 const QUEUE_LIMIT: usize = 2;
 /// Workers needed before we stop training them to save for the first Barracks
-const BARRACKS_AT_WORKERS: usize = 6;
+const BARRACKS_AT_WORKERS: usize = 4;
 /// Same as Build in `urgency`. Training is added after the unit commands and
 /// the sort is stable, so a Build that tick still gets the ore first.
 const SPAWN_URGENCY: u8 = 2;
@@ -74,14 +74,6 @@ fn scout_brain() -> FlyBrainConnectome {
     )
 }
 
-struct HeatMaps {
-    threat: Vec<f64>,
-    sugar: Vec<f64>,
-    prey: Vec<f64>,
-    w: i32,
-    h: i32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Role {
     Worker,
@@ -96,6 +88,8 @@ pub struct Flaud {
     building_costs: HashMap<BuildingType, i32>,
     map: MapDto,
     rules: RulesDto,
+    /// Kept from the last tick so the match screen can draw them
+    heat: Option<HeatMaps>,
 }
 
 impl Bot for Flaud {
@@ -148,7 +142,13 @@ impl Bot for Flaud {
         ranked.sort_by_key(|(u, _)| *u);
 
         let room = (s.you.queue_capacity - s.you.queued_commands).max(0) as usize;
-        ranked.into_iter().take(room).map(|(_, c)| c).collect()
+        let commands = ranked.into_iter().take(room).map(|(_, c)| c).collect();
+        self.heat = Some(maps);
+        commands
+    }
+
+    fn heat_maps(&self) -> Option<&HeatMaps> {
+        self.heat.as_ref()
     }
 
     fn new(m: MapDto, r: RulesDto) -> Self {
@@ -159,6 +159,7 @@ impl Bot for Flaud {
             building_costs: Self::building_cost(&r),
             map: m,
             rules: r,
+            heat: None,
         }
     }
 }
@@ -336,15 +337,12 @@ impl Flaud {
             }
 
             MotorAction::Gather => {
+                // Only truly idle workers: one Moving may be walking to a build
+                // site, and re-ordering it would abandon the building
                 let idle: Vec<i32> = s
                     .my_units()
                     .filter(|u| g.ids.contains(&u.id))
-                    .filter(|u| {
-                        !matches!(
-                            u.activity,
-                            UnitActivity::Gathering | UnitActivity::Returning
-                        )
-                    })
+                    .filter(|u| u.activity == UnitActivity::Idle)
                     .map(|u| u.id)
                     .collect();
                 if idle.is_empty() {
@@ -370,6 +368,10 @@ impl Flaud {
             }
 
             MotorAction::Build => {
+                // Finish what's started first, or the builder gets sent to a new site
+                if s.my_buildings().any(|b| !b.completed) {
+                    return None;
+                }
                 let kind = next_building(s);
                 let cost = *self.building_costs.get(&kind)?;
                 if s.you.resources < cost {
@@ -492,6 +494,22 @@ mod flaud_tests {
     #[test]
     fn worker_builds_when_rich_and_calm() {
         assert!(run(worker_brain, [0.0, 0.0, 0.0, 1.0]).contains(&Build));
+    }
+
+    #[test]
+    fn worker_gathers_while_saving_for_a_building() {
+        // Part way to a Barracks and away from ore: the old deadlock. Build fired
+        // every 2 ticks, so Gather's every-8th-tick spike always tied and was lost.
+        let a = run(worker_brain, [0.0, 0.0, 0.0, 0.5]);
+        assert!(a.contains(&Gather), "{a:?}");
+    }
+
+    #[test]
+    fn worker_near_sugar_and_rich_both_gathers_and_builds() {
+        // Gather and Build both fire every 2 ticks in lockstep here
+        let a = run(worker_brain, [0.0, 0.5, 0.0, 1.0]);
+        assert!(a.contains(&Gather), "{a:?}");
+        assert!(a.contains(&Build), "{a:?}");
     }
 
     #[test]
@@ -1017,6 +1035,31 @@ mod flaud_tests {
         assert!(c.is_none(), "everyone is busy");
     }
 
+    #[test]
+    fn gather_leaves_builders_alone() {
+        // A builder walks to its site (Moving), then constructs (Building).
+        // Ordering it to gather would abandon the building.
+        let mut s = world();
+        s.resources = vec![ResourceDepositDto {
+            id: 7,
+            x: 9,
+            y: 5,
+            remaining: 50,
+        }];
+        let mut walking = mine(1, UnitType::Worker);
+        walking.activity = UnitActivity::Moving;
+        let mut building = mine(2, UnitType::Worker);
+        building.activity = UnitActivity::Building;
+        s.units = vec![walking, building, mine(3, UnitType::Worker)];
+
+        let c = cmd(&bot(), Gather, Role::Worker, (5, 5), &maps(&[], &[]), &s).unwrap();
+        assert_eq!(c.unit_ids, Some(vec![3]), "1 and 2 are on their way to build");
+
+        s.units.truncate(2);
+        let c = cmd(&bot(), Gather, Role::Worker, (5, 5), &maps(&[], &[]), &s);
+        assert!(c.is_none(), "nobody is free");
+    }
+
     // --- senses ---
 
     #[test]
@@ -1228,6 +1271,27 @@ mod flaud_tests {
         )
         .unwrap();
         assert_eq!(c.building_type, Some(BuildingType::GuardTower));
+    }
+
+    #[test]
+    fn build_finishes_the_unfinished_building_first() {
+        // A half-built Barracks would otherwise make the next Build start a tower,
+        // pulling the builder off the Barracks
+        let mut s = with_cc(world(), 20, 10);
+        let mut barracks = my_building(501, BuildingType::Barracks, 25, 10);
+        barracks.completed = false;
+        barracks.construction_percent = 40;
+        s.buildings.push(barracks);
+        s.you.resources = 1000;
+        let c = cmd(
+            &builder_bot(),
+            Build,
+            Role::Worker,
+            (20, 10),
+            &maps(&[], &[]),
+            &s,
+        );
+        assert!(c.is_none(), "{c:?}");
     }
 
     #[test]

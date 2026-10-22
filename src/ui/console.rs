@@ -5,6 +5,7 @@ use crate::bots::test_bot::TestBot;
 use crate::logic::api::Api;
 use crate::logic::models::*;
 use crate::logic::shared::Bot;
+use crate::ui::match_screen::MatchScreen;
 use crate::ui::startup::Args;
 use crossterm::ExecutableCommand;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, MoveToRow, Show};
@@ -12,8 +13,13 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use std::io::{self, Write, stdout};
+use std::time::Instant;
 
-const MENU_ITEMS: usize = 5;
+const MENU_ITEMS: usize = 8;
+/// Main-menu entry that opens the match settings submenu instead of running an action.
+const CONFIGURE_ITEM: usize = 5;
+/// Rows in the match settings submenu: mode, house bot, seats, tick ms, max ticks, seed, map width, map height.
+const SETTING_ITEMS: usize = 8;
 
 struct TerminalGuard;
 
@@ -39,27 +45,31 @@ pub struct MenuContext {
     args: Args,
     /// Bot implementation used for the next match.
     logic: BotLogic,
+    /// Settings for matches we create; starts from the command line and is editable in "Configure Match".
+    settings: MatchSettingsDto,
 }
 
 impl MenuContext {
     pub fn new(c: Api, args: Args) -> Self {
+        let settings = MatchSettingsDto {
+            tick_interval_ms: args.tick_ms,
+            max_ticks: args.max_ticks,
+            seed: args.seed,
+            ..Default::default()
+        };
         Self {
             cursor_pos: 0,
             client: c,
             args,
             logic: BotLogic::default(),
+            settings,
         }
     }
 
-    /// Builds the create-match body from the command line, like `get_into_match` in `example_bot.py`:
-    /// an open match with `--players` seats for `--create`, otherwise a match vs the `--vs` house bot.
+    /// Builds the create-match body, like `get_into_match` in `example_bot.py`:
+    /// an open match with `players` seats in create mode, otherwise a match vs the `vs` house bot.
     fn create_request(&self) -> CreateMatchRequest {
-        let settings = MatchSettingsDto {
-            tick_interval_ms: self.args.tick_ms,
-            max_ticks: self.args.max_ticks,
-            seed: self.args.seed,
-            ..Default::default()
-        };
+        let settings = self.settings.clone();
         if self.args.create {
             CreateMatchRequest {
                 max_players: Some(self.args.players),
@@ -95,6 +105,7 @@ impl MenuContext {
                 }
                 KeyCode::Char('k') | KeyCode::Char('w') | KeyCode::Up => self.move_cursor(-1),
                 KeyCode::Char('j') | KeyCode::Char('s') | KeyCode::Down => self.move_cursor(1),
+                KeyCode::Enter if self.cursor_pos == CONFIGURE_ITEM => self.configure_match()?,
                 KeyCode::Enter => {
                     Self::clear_screen()?;
                     self.execute(self.cursor_pos).await?;
@@ -210,7 +221,7 @@ impl MenuContext {
             }
             4 => {
                 for (i, l) in BotLogic::ALL.iter().enumerate() {
-                    Self::line(&format!("  {}) {}", i + 1, l.name()), false)?;
+                    Self::line(&format!("\r\n\r\n  {}) {}", i + 1, l.name()), false)?;
                 }
                 let Some(input) = Self::prompt("Enter logic number or name: ")? else {
                     Self::line("Cancelled.", true)?;
@@ -225,6 +236,127 @@ impl MenuContext {
                 }
             }
             _ => (),
+        }
+        Ok(())
+    }
+
+    /// Submenu for editing the settings used by "Create Game"; Enter edits a row, q/Esc goes back.
+    fn configure_match(&mut self) -> io::Result<()> {
+        let mut cursor = 0;
+        let mut status: Option<(String, bool)> = None;
+
+        loop {
+            self.settings_menu(cursor, status.take())?;
+
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                KeyCode::Char('k') | KeyCode::Char('w') | KeyCode::Up => cursor = cursor.saturating_sub(1),
+                KeyCode::Char('j') | KeyCode::Char('s') | KeyCode::Down => {
+                    cursor = (cursor + 1).min(SETTING_ITEMS - 1)
+                }
+                KeyCode::Enter => status = Some(self.edit_setting(cursor)?),
+                _ => {}
+            }
+        }
+    }
+
+    /// Edits one settings row, returning a status message and whether it is an error.
+    fn edit_setting(&mut self, item: usize) -> io::Result<(String, bool)> {
+        // Mode is a toggle, everything else is typed in.
+        if item == 0 {
+            self.args.create = !self.args.create;
+            return Ok((format!("Mode set to {}", self.mode_name()), false));
+        }
+
+        let (name, current) = self.settings_rows()[item].clone();
+        let label = match item {
+            1 | 2 => format!("{name} (blank to keep {current}): "),
+            _ => format!("{name} (blank for server default, now {current}): "),
+        };
+        let Some(input) = Self::prompt(&label)? else {
+            return Ok(("Cancelled.".to_string(), true));
+        };
+
+        let result = match item {
+            1 => {
+                if !input.is_empty() {
+                    self.args.vs = input;
+                }
+                Ok(())
+            }
+            2 => Self::parse_setting(&input, 1).map(|v| {
+                if let Some(v) = v {
+                    self.args.players = v;
+                }
+            }),
+            3 => Self::parse_setting(&input, 1).map(|v| self.settings.tick_interval_ms = v),
+            4 => Self::parse_setting(&input, 1).map(|v| self.settings.max_ticks = v),
+            5 => Self::parse_setting(&input, i32::MIN).map(|v| self.settings.seed = v),
+            6 => Self::parse_setting(&input, 1).map(|v| self.settings.map_width = v),
+            7 => Self::parse_setting(&input, 1).map(|v| self.settings.map_height = v),
+            _ => Ok(()),
+        };
+
+        Ok(match result {
+            Ok(()) => (format!("{name} set to {}", self.settings_rows()[item].1), false),
+            Err(e) => (format!("{name}: {e}"), true),
+        })
+    }
+
+    /// Parses an optional whole number: blank means "unset", anything below `min` is rejected.
+    fn parse_setting(input: &str, min: i32) -> Result<Option<i32>, String> {
+        if input.is_empty() {
+            return Ok(None);
+        }
+        let v: i32 = input.parse().map_err(|_| format!("{input:?} is not a whole number"))?;
+        if v < min {
+            return Err(format!("must be at least {min}"));
+        }
+        Ok(Some(v))
+    }
+
+    fn mode_name(&self) -> &'static str {
+        if self.args.create { "open match" } else { "vs house bot" }
+    }
+
+    /// Label and current value of each row in the settings submenu.
+    fn settings_rows(&self) -> [(&'static str, String); SETTING_ITEMS] {
+        let opt = |v: Option<i32>| v.map_or("server default".to_string(), |v| v.to_string());
+        [
+            ("Mode", self.mode_name().to_string()),
+            ("House bot", self.args.vs.clone()),
+            ("Player seats", self.args.players.to_string()),
+            ("Tick ms", opt(self.settings.tick_interval_ms)),
+            ("Max ticks", opt(self.settings.max_ticks)),
+            ("Seed", opt(self.settings.seed)),
+            ("Map width", opt(self.settings.map_width)),
+            ("Map height", opt(self.settings.map_height)),
+        ]
+    }
+
+    fn settings_menu(&self, cursor: usize, status: Option<(String, bool)>) -> io::Result<()> {
+        Self::clear_screen()?;
+
+        print!("\r\n\t[Configure Match]\r\n\r\n");
+        for (i, (name, value)) in self.settings_rows().iter().enumerate() {
+            let marker = if i == cursor { "->" } else { "  " };
+            // House bot only matters vs a house bot, seats only for an open match.
+            let unused = (i == 1 && self.args.create) || (i == 2 && !self.args.create);
+            let value = if unused { value.clone().dark_grey() } else { value.clone().cyan() };
+            print!("[{}] {:<14}{}\r\n", marker.green(), name, value);
+        }
+        print!("\r\nEnter: edit/toggle   q/Esc: back\r\n\r\n");
+        stdout().flush()?;
+
+        if let Some((msg, err)) = status {
+            Self::line(&msg, err)?;
         }
         Ok(())
     }
@@ -256,42 +388,48 @@ impl MenuContext {
         // The map only exists once the match has started.
         let rules = self.client.get_rules().await?;
         let map = self.client.get_map(id).await?;
-        Self::line(
+
+        // From here the stats stay pinned to the top and the log scrolls beneath them
+        Self::clear_screen()?;
+        let mut screen = MatchScreen::new(self.logic.name());
+        screen.log(
             &format!("Match started: slot {} on a {}x{} map", state.you.slot, map.width, map.height),
             false,
-        )?;
+        );
         let mut bot = B::new(map, rules);
+        screen.draw(&state, bot.heat_maps())?;
 
         while state.status != MatchStatus::Completed {
+            let started = Instant::now();
             let commands = bot.decide(&state);
+            screen.stats.think.record(started.elapsed());
+
             if !commands.is_empty() {
+                let started = Instant::now();
                 let reply = self.client.submit_commands(id, &commands).await?;
-                for r in reply.results.iter().filter(|r| !r.accepted) {
+                screen.stats.submit.record(started.elapsed());
+
+                let rejected: Vec<_> = reply.results.iter().filter(|r| !r.accepted).collect();
+                screen.stats.sent(commands.len(), rejected.len());
+                for r in rejected {
                     let kind = commands.get(r.index as usize).map(|c| c.kind);
                     let msg = r.error.as_ref().map_or("unknown error", |e| e.message.as_str());
-                    Self::line(&format!("tick {}: rejected {kind:?}: {msg}", state.tick), true)?;
+                    screen.log(&format!("tick {}: rejected {kind:?}: {msg}", state.tick), true);
                 }
-            }
-            if state.tick % 100 == 0 {
-                Self::line(
-                    &format!(
-                        "tick {}: ore {}, {} units",
-                        state.tick,
-                        state.you.resources,
-                        state.my_units().count()
-                    ),
-                    false,
-                )?;
             }
 
             // Long-poll for the next tick; sinceTick limits events to the ones we haven't seen.
             let tick = state.tick;
             state = self.client.get_state(id, tick + 1, Some(tick)).await?;
+            screen.stats.observe_tick(tick, state.tick);
             for e in &state.events {
                 if matches!(e.kind.as_str(), "CommandFailed" | "BuildingCompleted" | "PlayerEliminated") {
-                    Self::line(&format!("tick {}: {}: {}", e.tick, e.kind, e.message), false)?;
+                    screen.log(&format!("tick {}: {}: {}", e.tick, e.kind, e.message), false);
                 }
             }
+            let started = Instant::now();
+            screen.draw(&state, bot.heat_maps())?;
+            screen.stats.draw.record(started.elapsed());
         }
 
         Self::line("\r\nMatch completed.", false)?;
@@ -418,7 +556,7 @@ impl MenuContext {
         Self::clear_screen()?;
 
         print!(
-            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\nLogic: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n[{}] Change Logic\r\n\r\n",
+            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\nLogic: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n[{}] Change Logic\r\n[{}] Configure Match\r\n\r\n",
             self.client.bot_name.to_string().yellow(),
             self.client.server.to_string().blue(),
             Self::mask_key(&self.client.api_key).green(),
@@ -428,6 +566,7 @@ impl MenuContext {
             self.is_selected(2).green(),
             self.is_selected(3).green(),
             self.is_selected(4).green(),
+            self.is_selected(5).green(),
         );
 
         stdout().flush()
@@ -453,8 +592,33 @@ mod console_tests {
         for _ in 0..MENU_ITEMS {
             m.move_cursor(1);
         }
-        assert_eq!(m.cursor_pos, 4);
-        assert_eq!(m.is_selected(4), "->");
+        assert_eq!(m.cursor_pos, CONFIGURE_ITEM);
+        assert_eq!(m.is_selected(CONFIGURE_ITEM), "->");
+    }
+
+    #[test]
+    fn parse_setting_handles_blank_numbers_and_bounds() {
+        assert_eq!(MenuContext::parse_setting("", 1), Ok(None));
+        assert_eq!(MenuContext::parse_setting("250", 1), Ok(Some(250)));
+        assert_eq!(MenuContext::parse_setting("-7", i32::MIN), Ok(Some(-7)));
+        assert!(MenuContext::parse_setting("0", 1).is_err());
+        assert!(MenuContext::parse_setting("fast", 1).is_err());
+    }
+
+    #[test]
+    fn create_request_uses_configured_settings() {
+        let mut m = menu();
+        m.args.create = true;
+        m.args.players = 4;
+        m.settings.tick_interval_ms = Some(50);
+        m.settings.map_width = Some(64);
+
+        let req = m.create_request();
+        assert_eq!(req.max_players, Some(4));
+        assert!(req.house_bots.is_none());
+        let s = req.settings.unwrap();
+        assert_eq!(s.tick_interval_ms, Some(50));
+        assert_eq!(s.map_width, Some(64));
     }
 
     #[test]

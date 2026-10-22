@@ -1,5 +1,11 @@
 use crate::logic::{neurons::*, sensory::*};
 
+/// Voltage a motor spike takes from every other motor (lateral inhibition).
+/// Keep it small: a frequent winner drains the others on every spike, so a
+/// slow, bias-only motor such as Gather far from sugar starves above ~0.11
+/// and is already slowed from tick 9 to 17 at 0.1.
+const INHIBITION: f32 = 0.05;
+
 pub struct FlyBrainConnectome {
     pub sensory: SensoryLayer,
     pub motor_neurons: Vec<LifNeuron>,
@@ -37,8 +43,8 @@ impl FlyBrainConnectome {
     pub fn tick(&mut self, senses: [f32; SENSES]) -> MotorAction {
         let spikes = self.sensory.encode_stimuli(senses).map(f32::from); // bool → 1.0 / 0.0
 
-        let mut fired: Option<MotorAction> = None;
-        let mut count = 0;
+        // Charge every motor first; nobody resets until a winner is picked
+        let mut winner: Option<(usize, f32)> = None;
         for (i, neuron) in self.motor_neurons.iter_mut().enumerate() {
             let current = self.bias[i]
                 + self.weights[i]
@@ -46,16 +52,26 @@ impl FlyBrainConnectome {
                     .zip(&spikes)
                     .map(|(w, s)| w * s)
                     .sum::<f32>();
-            if neuron.update(current) {
-                fired = Some(self.actions[i]);
-                count += 1;
+            let v = neuron.charge(current);
+            // Strict > keeps ties with the earlier row
+            if v >= neuron.threshold && winner.is_none_or(|(_, best)| v > best) {
+                winner = Some((i, v));
             }
         }
 
-        match (count, fired) {
-            (1, Some(action)) => action,
-            _ => MotorAction::HoldPosition,
+        let Some((w, _)) = winner else {
+            return MotorAction::HoldPosition;
+        };
+        // Only the winner resets. A loser over threshold stays charged and wins
+        // next tick, so motors firing in lockstep take turns instead of deadlocking.
+        for (i, neuron) in self.motor_neurons.iter_mut().enumerate() {
+            if i == w {
+                neuron.reset();
+            } else {
+                neuron.voltage -= INHIBITION;
+            }
         }
+        self.actions[w]
     }
 }
 
@@ -280,12 +296,68 @@ mod connectome_tests {
     }
 
     #[test]
-    fn tick_holds_on_a_tie() {
+    fn tick_picks_one_action_on_a_tie() {
         let mut b = wired(&[
             ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
             ([0.0; SENSES], THRESHOLD, MotorAction::Gather),
         ]);
-        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::HoldPosition);
+        let a = b.tick([0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            matches!(a, MotorAction::Attack | MotorAction::Gather),
+            "a tie must still act, got {a:?}"
+        );
+    }
+
+    #[test]
+    fn tick_tie_goes_to_the_most_charged_neuron() {
+        // Both cross threshold, but Gather is driven harder
+        let mut b = wired(&[
+            ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], 1.5 * THRESHOLD, MotorAction::Gather),
+        ]);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Gather);
+    }
+
+    #[test]
+    fn tick_loser_of_a_tie_fires_next_tick() {
+        // The loser stays charged instead of resetting, so it gets its turn next
+        let mut b = wired(&[
+            ([0.0; SENSES], 1.5 * THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], THRESHOLD, MotorAction::Gather),
+        ]);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Gather);
+    }
+
+    #[test]
+    fn tick_neurons_in_lockstep_take_turns() {
+        // Equal drive fires both on the same ticks forever. Neither may starve.
+        let mut b = wired(&[
+            ([0.0; SENSES], 0.6, MotorAction::Build),
+            ([0.0; SENSES], 0.6, MotorAction::Gather),
+        ]);
+        let a: Vec<_> = (0..12).map(|_| b.tick([0.0, 0.0, 0.0, 0.0])).collect();
+        assert!(a.contains(&MotorAction::Build), "{a:?}");
+        assert!(a.contains(&MotorAction::Gather), "{a:?}");
+    }
+
+    #[test]
+    fn tick_winner_inhibits_the_others() {
+        // Lateral inhibition: a spike pushes the neurons that lost further from threshold
+        let mut b = wired(&[
+            ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
+            ([0.0; SENSES], 0.5, MotorAction::Gather),
+        ]);
+        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
+        let v = b.motor_neurons[1].voltage;
+        assert!(v < 0.5, "loser kept its full charge: {v}");
+    }
+
+    #[test]
+    fn tick_does_not_inhibit_when_nothing_fires() {
+        let mut b = wired(&[([0.0; SENSES], 0.5, MotorAction::Gather)]);
+        b.tick([0.0, 0.0, 0.0, 0.0]);
+        assert!((b.motor_neurons[0].voltage - 0.5).abs() < 1e-6);
     }
 
     #[test]
@@ -323,15 +395,12 @@ mod connectome_tests {
     fn tick_updates_every_motor_neuron_even_after_one_fires() {
         // Motor 0 fires every tick. If the loop stopped at the first spike,
         // motor 1 would never charge.
+        // motor 1 may be inhibited afterwards, but it must have moved off rest
         let mut b = wired(&[
             ([0.0; SENSES], THRESHOLD, MotorAction::Attack),
             ([0.0; SENSES], 0.5, MotorAction::Gather),
         ]);
         assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
-        assert!((b.motor_neurons[1].voltage - 0.5).abs() < 1e-6);
-
-        // 0.5 -> 0.95 -> 1.355 fires on tick 3, tying with motor 0
-        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
-        assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::HoldPosition);
+        assert!(b.motor_neurons[1].voltage != 0.0, "never charged");
     }
 }
