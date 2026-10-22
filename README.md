@@ -90,6 +90,61 @@ fn decide(&mut self, state: &GameStateDto) -> Vec<CommandRequest>;
 
 `new` is called once the match has started. `decide` is called every tick with the latest state, and the commands it returns are sent to the server. `src/bots/test_bot.rs` is a complete example. Menu matches currently run `TestBot` (see `play_match::<TestBot>()` in `src/ui/console.rs`).
 
+## How Flaud works
+
+Flaud splits its units into small groups and gives each group a tiny spiking-neuron brain (`FlyBrainConnectome` in `src/logic/connectome.rs`). Each tick, every brain feels the battlefield around its group and fires at most one action, which `Flaud::command` turns into a server command.
+
+```
+state ─▶ heat maps ─▶ senses at the group's centre ─▶ brain.tick ─▶ MotorAction ─▶ CommandRequest
+```
+
+### Heat maps
+
+`src/logic/shared.rs` builds three heat maps each tick, on separate threads. Each source spreads heat over the tiles within `R` (9) of it, fading with Chebyshev distance, and each map is scaled so its hottest tile is 1.0.
+
+| Map | Sources |
+| --- | --- |
+| `encode_threat` | Enemy combat units (Soldier, Archer, Scout) and enemy GuardTowers |
+| `encode_sugar` | Resource deposits, weighted by ore remaining |
+| `encode_prey` | Enemy workers, then enemy buildings: Barracks first, then CommandCenter and GuardTower, then the rest. Includes enemy buildings remembered from earlier sightings |
+
+### Senses
+
+A brain has four senses, `[threat, sugar, prey, wealth]`, each between 0 and 1. The first three are the heat maps read at the group's centre. Wealth is your resources as a share of the cheapest building cost, capped at 1.
+
+### Role brains
+
+Each sense neuron and motor neuron is a leaky integrate-and-fire neuron (`src/logic/neurons.rs`): it charges with input, leaks a little every tick, and fires when it crosses its threshold. Because voltage carries over between ticks, a group reacts to a threat that lasts, not to one passing enemy. If exactly one motor neuron fires, that's the action; if none or several fire, the group holds.
+
+| Role | Units | Actions |
+| --- | --- | --- |
+| Worker | Workers | Retreat from threat, Gather (drawn to sugar, and always eventually), Build when rich and safe |
+| Army | Soldiers and Archers | Attack threat, Explore toward prey, but never while fighting |
+| Scout | Scouts | Retreat from threat, Explore when calm and sooner toward prey |
+
+The weights are in `worker_brain`, `army_brain` and `scout_brain` in `src/bots/flaud.rs`.
+
+### Groups
+
+`update_groups` runs at the start of every tick. It removes dead units, drops empty groups, and puts new units in a group of their role with room (up to `GROUP_SIZE`, 5), or starts a new group with a fresh brain. Surviving groups keep their brain, so they keep their neuron voltages.
+
+### From actions to commands
+
+The server does the pathfinding, so each action only picks a destination:
+
+| Action | Command | Destination |
+| --- | --- | --- |
+| Hold | none | — |
+| Attack | attack-move | The hottest threat within `R` of the group (the fight it can feel), or where it stands |
+| Retreat | move | Your CommandCenter, or directly away from the nearby threat if there is no CC |
+| Gather | gather | The nearest deposit with ore left |
+| Explore | attack-move (army), move (scout) | The hottest prey on the whole map, or the enemy start position if no prey is known |
+| Build | build, with one worker | A site 3-6 tiles from your CC (`find_site`). A Barracks first, then GuardTowers, and only if you can afford it |
+
+### Status
+
+`Flaud::decide` runs the whole pipeline each tick. It also trains units with `spawn_units`: workers from the CC up to 12 (pausing at 6 to save for the first Barracks), then scouts and a soldier/archer mix from each Barracks. Commands are sorted by urgency (Retreat first) and cut to the server's free queue room. Next: tuning the brains against house bots in real matches.
+
 ## Changes
 
 See [changelog.md](changelog.md).

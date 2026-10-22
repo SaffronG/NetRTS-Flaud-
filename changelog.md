@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-10-22 01:25:03 MDT — Step 10: Flaud trains units
+
+### Added
+
+- `src/bots/flaud.rs`: `spawn_units` trains units each tick, and `next_unit` picks what each building trains. Each unit's `produced_at` in the rules decides which building trains it, so nothing is hard-coded.
+  - CommandCenter: Workers, up to `TARGET_WORKERS` (12). Units already queued count toward the target.
+  - Barracks: Scouts first, up to `TARGET_SCOUTS` (2). Then Soldiers and Archers, whichever there are fewer of (ties go to Soldier), with no limit.
+  - Buildings that are unfinished or already have `QUEUE_LIMIT` (2) units queued are skipped.
+  - Once there are `BARRACKS_AT_WORKERS` (6) workers and no Barracks, workers stop being trained so ore can build up for the first Barracks, as `TestBot` does.
+  - Orders are paid from one running ore total, so one tick never orders more than it can afford. Units missing from the rules are never trained.
+- `src/bots/flaud.rs`: `Flaud` keeps the `RulesDto`, for unit costs and where each unit is trained.
+
+### Changed
+
+- `src/bots/flaud.rs`: `decide` adds training orders to the group commands with `SPAWN_URGENCY` (the same as Build), then sorts and cuts everything to the queue's free room. Training is added after the group commands and the sort is stable, so a Build that tick gets the ore first, and Retreat and Attack always come before training.
+
+### Tests
+
+- `src/bots/flaud.rs`: the CC trains a worker when it can afford one and nothing without the ore, stops at the worker target counting the queue, and pauses to save for the first Barracks. The Barracks trains scouts first, then a soldier/archer mix. Unfinished or busy buildings train nothing. One tick never orders more than the ore covers. Units missing from the rules are never trained. `decide` sends training orders, and with room for one command, a Retreat beats training.
+
+## 2026-10-22 01:18:36 MDT — Steps 6–9: Flaud plays its own moves
+
+`Flaud::decide` now goes from game state to commands: it groups units, builds heat maps, ticks each group's brain on what it senses, and turns the action into a server command. It still doesn't train units (step 10).
+
+### Step 6: senses (committed in `fb25ac3`)
+
+- `src/logic/shared.rs`: `encode_prey` covers enemy workers and enemy buildings, including enemy buildings remembered from earlier sightings. Remembered buildings that are still visible aren't counted twice. Prey weights are Barracks `0.8`, CommandCenter `0.6`, GuardTower `0.55`, other buildings `0.3`, and workers `1.0`.
+- `src/logic/shared.rs`: `sample(map, w, h, x, y)` reads one cell as `f32`, or `0` off the map. `uphill` returns the step toward the hottest neighbour; Flaud no longer uses it since the server does the pathfinding.
+- `src/bots/flaud.rs`: `encode_wealth` is resources divided by the cheapest building cost (free buildings are skipped), capped between 0 and 1. `centroid` is the average position of a group's living units, or `None` if all of them are dead. `decide` builds the prey map on a third scoped thread.
+
+### Step 7: groups
+
+- `src/bots/flaud.rs`: `update_groups` runs at the start of every tick. `prune` removes dead unit ids and drops empty groups. New units then `join` a group of their role with fewer than `GROUP_SIZE` units, or start a new group with that role's brain: Workers go to `workers`, Scouts to `regiments`, and Soldiers and Archers to `armies`. Surviving groups keep their brain and its voltages.
+
+### Step 8: actions to commands
+
+- `src/logic/shared.rs`: added `pub type Loc`, made `R` public, and added `hottest_near(map, w, h, at, radius)`, which returns the hottest warm cell near `at` (pass `w.max(h)` to search the whole map).
+- `src/logic/shared.rs`: moved `find_site` (now `find_site(terrain, s, cx, cy)`) and `enemy_base` here from `TestBot`, which now calls the shared versions. TestBot's behaviour is unchanged.
+- `src/bots/flaud.rs`: `Flaud` keeps the `MapDto`. Added `Role`, `my_cc`, `next_building` (a Barracks first, then GuardTowers), and `command`, which turns an action into a destination; the server does the pathfinding:
+  - Hold: no command.
+  - Attack: attack-move to the hottest threat within `R`, or where the group stands.
+  - Retreat: move to the CC. Without a CC, move directly away from the nearby threat, kept on the map.
+  - Gather: the nearest deposit with ore left.
+  - Explore: the hottest prey on the whole map, or the enemy base. Armies attack-move and scouts move.
+  - Build: one worker builds `next_building`, but only if that building is affordable and there is a CC and a site.
+- `src/bots/flaud.rs`: removed the local `type Loc` and the unfinished `step` and `STEP`.
+
+### Step 9: `decide`
+
+- `src/bots/flaud.rs`: `decide` packs the heat maps into a `HeatMaps` and works out `wealth` once per tick. It then runs in two passes. The first is mutable: it ticks every group's brain with `senses` at the group's `centroid` and records each decision. The second is read-only: it turns those decisions into commands with `command`. Two passes are needed because `command` borrows `self` while the groups are borrowed mutably in the first pass.
+- `src/bots/flaud.rs`: decisions are sorted by `urgency` (Retreat, Attack, Build, Gather, Explore, Hold), and commands are cut to the queue's free room (`queue_capacity - queued_commands`). When the queue is full, Gather and Explore are dropped before Retreat or Attack.
+- `src/bots/flaud.rs`: Gather only orders workers that aren't already `Gathering` or `Returning`, so a worker carrying ore home isn't sent back to the deposit. If every worker is busy, nothing is sent.
+- `src/bots/flaud.rs`: added `senses` (the maps read at a location, in `THREAT, SUGAR, PREY, WEALTH` order) and `Flaud::groups(role)`.
+- `README.md`: added a "How Flaud works" section covering the heat maps, senses, role brains, groups, actions to commands, and status.
+
+### Tests
+
+- `src/logic/shared.rs`: `encode_prey` (enemy workers only, the building order, own buildings ignored, remembered buildings, no double counting); `sample`; `uphill`; `hottest_near` (local vs whole map, cold or out of range, clipped at edges); `find_site` (3–6 tiles out, avoids walls, ore and buildings, `None` when boxed in); `enemy_base` falls back to the map centre.
+- `src/bots/flaud.rs`: `encode_wealth`; `centroid`; `update_groups` (grouped by role, the `GROUP_SIZE` cap, enemies ignored, no duplicates across ticks, dead units removed, empty groups dropped, brains kept, the right brain per role); every arm of `command`; `senses` slot order; `urgency` order.
+- `src/bots/flaud.rs`: whole-tick `decide` tests. Idle workers near ore are sent to gather, busy workers are left alone, the army attacks an adjacent enemy, calm scouts explore, and commands never exceed the queue's free room. `stub_sends_no_commands` is now `no_units_sends_no_commands`.
+
 ## 2026-10-21 22:45:52 MDT — Step 5: role brains with four senses
 
 ### Added

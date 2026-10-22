@@ -5,7 +5,7 @@
 
 use crate::logic::models::*;
 use crate::logic::shared::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const TARGET_WORKERS: usize = 10;
 /// Soldiers needed before the first attack
@@ -62,7 +62,7 @@ impl Bot for TestBot {
             && workers.len() >= BARRACKS_AT_WORKERS
             && s.tick - self.barracks_ordered_at > BARRACKS_RETRY_TICKS
         {
-            let site = self.find_site(s, cc);
+            let site = find_site(&self.terrain, s, cc.x, cc.y);
             let builder = workers
                 .iter()
                 .copied()
@@ -138,12 +138,15 @@ impl Bot for TestBot {
                 .collect();
             if !idle.is_empty() {
                 let (sx, sy) = (soldiers[0].x, soldiers[0].y);
-                match enemies.iter().min_by_key(|(_, ex, ey)| dist(sx, sy, *ex, *ey)) {
+                match enemies
+                    .iter()
+                    .min_by_key(|(_, ex, ey)| dist(sx, sy, *ex, *ey))
+                {
                     // Something visible: go hit the closest thing
                     Some(&(target, _, _)) => commands.push(CommandRequest::attack(idle, target)),
                     // Attack-move toward the enemy base (engages anything seen on the way)
                     None => {
-                        let target = Self::enemy_base(s);
+                        let target = enemy_base(s);
                         commands.push(CommandRequest::attack_move(idle, target.x, target.y));
                     }
                 }
@@ -172,54 +175,6 @@ impl TestBot {
     /// Cost of a building from the rules; unknown types are never affordable.
     fn building_price(&self, t: BuildingType) -> i32 {
         self.rules.building(t).map_or(i32::MAX, |b| b.cost)
-    }
-
-    /// Start position of the first opponent still in the game.
-    fn enemy_base(s: &GameStateDto) -> PositionDto {
-        let me = s.you.slot;
-        s.players
-            .iter()
-            .find(|p| p.slot != me && !p.eliminated)
-            .map(|p| p.start_position)
-            .unwrap_or(PositionDto {
-                x: s.map_width / 2,
-                y: s.map_height / 2,
-            })
-    }
-
-    /// An open tile 3-6 tiles from the CC, not on/next to a deposit and not on a building.
-    fn find_site(&self, s: &GameStateDto, cc: &BuildingDto) -> Option<(i32, i32)> {
-        let taken: HashSet<(i32, i32)> = s.buildings.iter().map(|b| (b.x, b.y)).collect();
-        let ore: Vec<(i32, i32)> = s.resources.iter().map(|d| (d.x, d.y)).collect();
-        let height = self.terrain.len() as i32;
-        let width = self.terrain.first().map_or(0, |r| r.len()) as i32;
-
-        let mut best: Option<(i32, i32, i32)> = None;
-        for y in cc.y - 6..=cc.y + 6 {
-            for x in cc.x - 6..=cc.x + 6 {
-                let d = dist(x, y, cc.x, cc.y);
-                if !((3..=6).contains(&d) && (0..width).contains(&x) && (0..height).contains(&y)) {
-                    continue;
-                }
-                if self.terrain[y as usize].as_bytes()[x as usize] != b'.' || taken.contains(&(x, y)) {
-                    continue;
-                }
-                if ore.iter().any(|&(ox, oy)| dist(x, y, ox, oy) <= 1) {
-                    continue;
-                }
-                // Prefer close to the CC, and away from the ore so we don't block the miners.
-                let near_ore = ore
-                    .iter()
-                    .map(|&(ox, oy)| dist(x, y, ox, oy))
-                    .min()
-                    .unwrap_or(99);
-                let score = d - near_ore.min(4);
-                if best.is_none_or(|(b, _, _)| score < b) {
-                    best = Some((score, x, y));
-                }
-            }
-        }
-        best.map(|(_, x, y)| (x, y))
     }
 }
 

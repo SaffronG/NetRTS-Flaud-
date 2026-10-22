@@ -1,5 +1,5 @@
 use crate::logic::models::{BuildingType, *};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const STIMULI_LOOKUP: [f64; 10] = [
     10.0,
@@ -13,10 +13,11 @@ pub const STIMULI_LOOKUP: [f64; 10] = [
     0.0033546262790251184,
     0.0004006529739295107,
 ];
-const R: i32 = (STIMULI_LOOKUP.len() - 1) as i32;
+/// How far one source reaches on a heat map, in tiles
+pub const R: i32 = (STIMULI_LOOKUP.len() - 1) as i32;
+
+pub type Loc = (i32, i32);
 const UNIT_WEIGHT: f64 = 1.0;
-// Prey building order: Barracks first, then CommandCenter and GuardTower close
-// behind, then everything else. Only the ratios matter after `normalize`.
 const BARRACKS_WEIGHT: f64 = 0.8;
 const CC_WEIGHT: f64 = 0.6;
 const TOWER_WEIGHT: f64 = 0.55;
@@ -138,6 +139,71 @@ pub fn uphill(map: &[f64], w: i32, h: i32, x: i32, y: i32) -> (i32, i32) {
         }
     }
     best.0
+}
+
+/// The hottest cell within `radius` of `at`, or None if nothing there is warm.
+/// Pass `w.max(h)` as the radius to search the whole map.
+pub fn hottest_near(map: &[f64], w: i32, h: i32, at: Loc, radius: i32) -> Option<Loc> {
+    let (x0, x1) = ((at.0 - radius).max(0), (at.0 + radius).min(w - 1));
+    let (y0, y1) = ((at.1 - radius).max(0), (at.1 + radius).min(h - 1));
+    let mut best: Option<(Loc, f64)> = None;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let v = map[(y * w + x) as usize];
+            if v > 0.0 && best.is_none_or(|(_, b)| v > b) {
+                best = Some(((x, y), v));
+            }
+        }
+    }
+    best.map(|(loc, _)| loc)
+}
+
+/// An open tile 3-6 tiles from (cx, cy), not on/next to a deposit and not on a building.
+pub fn find_site(terrain: &[String], s: &GameStateDto, cx: i32, cy: i32) -> Option<Loc> {
+    let taken: HashSet<Loc> = s.buildings.iter().map(|b| (b.x, b.y)).collect();
+    let ore: Vec<Loc> = s.resources.iter().map(|d| (d.x, d.y)).collect();
+    let height = terrain.len() as i32;
+    let width = terrain.first().map_or(0, |r| r.len()) as i32;
+
+    let mut best: Option<(i32, i32, i32)> = None;
+    for y in cy - 6..=cy + 6 {
+        for x in cx - 6..=cx + 6 {
+            let d = dist(x, y, cx, cy);
+            if !((3..=6).contains(&d) && (0..width).contains(&x) && (0..height).contains(&y)) {
+                continue;
+            }
+            if terrain[y as usize].as_bytes()[x as usize] != b'.' || taken.contains(&(x, y)) {
+                continue;
+            }
+            if ore.iter().any(|&(ox, oy)| dist(x, y, ox, oy) <= 1) {
+                continue;
+            }
+            // Prefer close to the centre, and away from the ore so we don't block the miners.
+            let near_ore = ore
+                .iter()
+                .map(|&(ox, oy)| dist(x, y, ox, oy))
+                .min()
+                .unwrap_or(99);
+            let score = d - near_ore.min(4);
+            if best.is_none_or(|(b, _, _)| score < b) {
+                best = Some((score, x, y));
+            }
+        }
+    }
+    best.map(|(_, x, y)| (x, y))
+}
+
+/// Start position of the first opponent still in the game, or the map centre.
+pub fn enemy_base(s: &GameStateDto) -> PositionDto {
+    let me = s.you.slot;
+    s.players
+        .iter()
+        .find(|p| p.slot != me && !p.eliminated)
+        .map(|p| p.start_position)
+        .unwrap_or(PositionDto {
+            x: s.map_width / 2,
+            y: s.map_height / 2,
+        })
 }
 
 pub fn dist(sx: i32, sy: i32, tx: i32, ty: i32) -> i32 {
@@ -605,6 +671,84 @@ mod tests {
         let (w, h) = (20, 12);
         let map = peak_map(w, h, 3, 3);
         assert_eq!(uphill(&map, w, h, 0, 0), (1, 1));
+    }
+
+    // --- hottest_near ---
+
+    fn hot_cells(w: i32, h: i32, cells: &[(Loc, f64)]) -> Vec<f64> {
+        let mut map = vec![0.0; (w * h) as usize];
+        for &((x, y), v) in cells {
+            map[(y * w + x) as usize] = v;
+        }
+        map
+    }
+
+    #[test]
+    fn hottest_near_finds_the_local_peak_not_the_global_one() {
+        let (w, h) = (40, 10);
+        let map = hot_cells(w, h, &[((6, 5), 0.4), ((35, 5), 1.0)]);
+        assert_eq!(hottest_near(&map, w, h, (5, 5), R), Some((6, 5)));
+        assert_eq!(hottest_near(&map, w, h, (5, 5), w.max(h)), Some((35, 5)));
+    }
+
+    #[test]
+    fn hottest_near_is_none_when_nothing_is_warm() {
+        let (w, h) = (20, 10);
+        assert_eq!(hottest_near(&vec![0.0; 200], w, h, (5, 5), w), None);
+        // Warm, but out of range
+        let map = hot_cells(w, h, &[((19, 9), 1.0)]);
+        assert_eq!(hottest_near(&map, w, h, (0, 0), 3), None);
+    }
+
+    #[test]
+    fn hottest_near_clips_its_window_at_the_edges() {
+        let (w, h) = (10, 10);
+        let map = hot_cells(w, h, &[((0, 0), 0.5), ((9, 9), 0.7)]);
+        assert_eq!(hottest_near(&map, w, h, (1, 1), R), Some((9, 9)));
+        assert_eq!(hottest_near(&map, w, h, (0, 0), 2), Some((0, 0)));
+    }
+
+    // --- find_site ---
+
+    fn open(w: usize, h: usize) -> Vec<String> {
+        vec![".".repeat(w); h]
+    }
+
+    #[test]
+    fn find_site_is_3_to_6_tiles_from_the_centre_on_open_ground() {
+        let s = state(20, 20, vec![], vec![]);
+        let (x, y) = find_site(&open(20, 20), &s, 10, 10).unwrap();
+        assert!((3..=6).contains(&dist(x, y, 10, 10)), "({x}, {y})");
+    }
+
+    #[test]
+    fn find_site_avoids_buildings_ore_and_walls() {
+        let mut terrain = open(20, 20);
+        terrain[7] = "#".repeat(20);
+        let mut s = state(20, 20, vec![], vec![deposit(1, 13, 10, 50)]);
+        s.buildings = vec![building(1, BuildingType::Barracks, ME, 10, 13)];
+        for _ in 0..20 {
+            let (x, y) = find_site(&terrain, &s, 10, 10).unwrap();
+            assert_ne!(y, 7, "not on a wall");
+            assert!(dist(x, y, 13, 10) > 1, "not next to ore");
+            assert_ne!((x, y), (10, 13), "not on a building");
+            // Pretend it got built so the next call has to pick another tile
+            s.buildings.push(building(99, BuildingType::GuardTower, ME, x, y));
+        }
+    }
+
+    #[test]
+    fn find_site_is_none_when_boxed_in() {
+        let s = state(20, 20, vec![], vec![]);
+        assert_eq!(find_site(&vec!["#".repeat(20); 20], &s, 10, 10), None);
+    }
+
+    // --- enemy_base ---
+
+    #[test]
+    fn enemy_base_falls_back_to_the_map_centre() {
+        let base = enemy_base(&state(40, 20, vec![], vec![]));
+        assert_eq!((base.x, base.y), (20, 10));
     }
 
     // --- both maps together ---
