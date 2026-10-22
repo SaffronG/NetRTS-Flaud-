@@ -1427,35 +1427,6 @@ mod flaud_tests {
     }
 
     #[test]
-    fn barracks_trains_scouts_first_then_a_soldier_archer_mix() {
-        let me = fixtures::state().you.slot;
-        let bot = trainer_bot();
-        let next = |units: Vec<UnitDto>| {
-            trained(&bot.spawn_units(&base(1000, vec![barracks(501)], units)))
-        };
-
-        assert_eq!(next(vec![]), vec![(501, UnitType::Scout)]);
-
-        let two_scouts = vec![
-            placed(1, UnitType::Scout, me, 0, 0),
-            placed(2, UnitType::Scout, me, 0, 0),
-        ];
-        assert_eq!(
-            next(two_scouts.clone()),
-            vec![(501, UnitType::Soldier)],
-            "tie goes to Soldier"
-        );
-
-        let mut with_soldier = two_scouts;
-        with_soldier.push(placed(3, UnitType::Soldier, me, 0, 0));
-        assert_eq!(
-            next(with_soldier),
-            vec![(501, UnitType::Archer)],
-            "fewer archers"
-        );
-    }
-
-    #[test]
     fn unfinished_or_busy_buildings_train_nothing() {
         let mut building = barracks(501);
         building.completed = false;

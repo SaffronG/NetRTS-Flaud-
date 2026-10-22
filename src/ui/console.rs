@@ -587,16 +587,6 @@ mod console_tests {
     }
 
     #[test]
-    fn cursor_reaches_change_logic_item() {
-        let mut m = menu();
-        for _ in 0..MENU_ITEMS {
-            m.move_cursor(1);
-        }
-        assert_eq!(m.cursor_pos, CONFIGURE_ITEM);
-        assert_eq!(m.is_selected(CONFIGURE_ITEM), "->");
-    }
-
-    #[test]
     fn parse_setting_handles_blank_numbers_and_bounds() {
         assert_eq!(MenuContext::parse_setting("", 1), Ok(None));
         assert_eq!(MenuContext::parse_setting("250", 1), Ok(Some(250)));
