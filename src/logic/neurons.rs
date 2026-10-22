@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct LifNeuron {
     pub voltage: f32,
     pub threshold: f32,

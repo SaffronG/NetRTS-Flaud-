@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-10-21 21:28:50 MDT — Brain per group and variable motor neurons
+
+### Added
+
+- `src/bots/flaud.rs`: `BrainGroup` pairs a group's unit `ids` with its own `FlyBrainConnectome`. `regiments`, `workers` and `armies` are now `Vec<BrainGroup>`, so each group keeps its neuron voltages between ticks and a group can't end up with another group's brain when one is removed.
+- `src/logic/connectome.rs`: `FlyBrainConnectome` has new `bias` and `actions` fields, one per motor neuron. `bias` is a constant current added every tick, so a neuron can fire with no input, for example a scout exploring when nothing is around.
+
+### Changed
+
+- `src/logic/connectome.rs`: `new(weights, decay, threshold, bias, actions)` now also takes `bias` and `actions`. It panics if their lengths don't match `weights`.
+- `src/logic/connectome.rs`: `tick(threat, sugar)` works with any number of motor neurons. Each neuron's input is its bias plus its weight row times the vision and smell spikes, with `weights` read as `[motor][sensor]`. Every motor neuron is updated each tick. If exactly one fires, `tick` returns its action; if none or several fire, it returns `HoldPosition`. The parameters were renamed from `enemy_dist`/`mineral_dist`, since they are heat values now.
+- `src/logic/connectome.rs`: `MotorAction` derives `Clone`, `Copy`, `Debug` and `PartialEq`.
+- `src/bots/flaud.rs`: formatted with `cargo fmt`.
+
+### Removed
+
+- `src/logic/connectome.rs`: the old 2-neuron `tick`, which had Retreat and Attack hard-coded and read `weights` as `[sensor][motor]`.
+
+### Tests
+
+- `src/logic/connectome.rs`: updated the `brain()` helper and `new_keeps_weights_in_order` for the new `new`, and added a `wired()` helper. New tests check that a `bias` or `actions` list of the wrong length panics, and that `tick` holds when nothing fires, fires on bias alone, returns the only neuron that fired, holds on a tie, reads weights as `[motor][sensor]`, lets a negative weight cancel the bias, and updates every motor neuron even after one fires.
+
+## 2026-10-21 20:19:01 MDT — Heat map inputs and connectome constructor
+
+### Changed
+
+- `src/logic/sensory.rs`: `encode_stimuli(threat, sugar)` now takes heat map values from 0 to 1 instead of distances. It scales them by `VISION_GAIN` and `SMELL_GAIN` (both `5.0`) to get the input currents. The `MAX_DIST` conversion is gone.
+- `src/logic/connectome.rs`: `weights` is now `Vec<[f32; 2]>`, one row per motor neuron. `tick` still reads it as `[sensor][motor]`; that is fixed in step 4.
+- `src/logic/connectome.rs`: added `MotorAction::Gather` and `MotorAction::Explore`.
+- `src/bots/flaud.rs`: unit groups are now `Vec<Vec<i32>>` instead of `[i32; 5]`, so a group can shrink when units die.
+
+### Added
+
+- `src/logic/connectome.rs`: `FlyBrainConnectome::new(weights, decay, threshold)` builds one vision neuron, one smell neuron, and one motor neuron per row of `weights`. All neurons start at rest.
+- `src/logic/neurons.rs`: `LifNeuron` now derives `Clone`, so `vec![neuron; n]` creates `n` independent neurons.
+
+### Fixed
+
+- `src/logic/sensory.rs`: vision input was sent to `olfactory_neurons[0]`, so vision and smell were adding up in one neuron. It now uses `vision_neurons[0]`.
+
+### Tests
+
+- `src/logic/connectome.rs`: replaced the placeholder `ConnectomeTesting::setup` test with `connectome_tests`. The new tests check that `new` creates one motor neuron per weight row, one vision and one smell neuron, keeps the weights in order, and starts every neuron at rest with the given `decay` and `threshold`. They also check that motor neurons and separate brains don't share voltage, that weak input builds up over ticks until a neuron fires, and that voltage leaks by `decay` when there is no input.
+
+## 2026-10-21 18:01:38 MDT — Build Flaud's heat maps concurrently
+
+### Changed
+
+- `src/bots/flaud.rs`: `Flaud::decide` builds the threat and sugar maps at the same time, running `encode_threat` and `encode_sugar` on two `std::thread::scope` threads. Both threads borrow the game state, so it isn't cloned, and both finish before `decide` returns. The results are in `_threat` and `_sugar` until they're used.
+- `encode_threat` and `encode_sugar` remain plain sync functions, and the `Bot` trait is unchanged. Running them through `tokio::spawn` would have needed owned `'static` state, an async `decide`, and a tokio runtime in the tests, and these CPU-bound loops would have tied up tokio's worker threads.
+
+### Fixed
+
+- `src/bots/flaud.rs`: `decide` named its parameter `_s` but used `s`, and passed the encoders' `Vec<f64>` results to `tokio::spawn`, which needs a future. Both compile errors are gone.
+
 ## 2026-10-21 17:48:24 MDT — Heat map tests
 
 ### Tests
