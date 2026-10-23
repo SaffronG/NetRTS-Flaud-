@@ -19,7 +19,7 @@ pub struct Args {
     )]
     pub key: Option<String>,
 
-    #[arg(long, help = "house bot to play against", default_value = "sitter")]
+    #[arg(long, help = "house bot(s) to play against, comma separated", default_value = "sitter")]
     pub vs: String,
 
     #[arg(
@@ -239,7 +239,7 @@ mod startup_test {
                 "bot name to register (needed unless --key is given)",
             ),
             ("key", "existing API key"),
-            ("vs", "house bot to play against"),
+            ("vs", "house bot(s) to play against, comma separated"),
             ("create", "create a match for others to join"),
             ("join", "join an existing match"),
             ("players", "seats when using --create"),

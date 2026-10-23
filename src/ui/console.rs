@@ -66,8 +66,17 @@ impl MenuContext {
         }
     }
 
+    /// The house bots to play against: `vs` split on commas, blanks dropped.
+    fn house_bots(&self) -> Vec<String> {
+        Self::parse_house_bots(&self.args.vs)
+    }
+
+    fn parse_house_bots(input: &str) -> Vec<String> {
+        input.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+    }
+
     /// Builds the create-match body, like `get_into_match` in `example_bot.py`:
-    /// an open match with `players` seats in create mode, otherwise a match vs the `vs` house bot.
+    /// an open match with `players` seats in create mode, otherwise a match vs the `vs` house bots.
     fn create_request(&self) -> CreateMatchRequest {
         let settings = self.settings.clone();
         if self.args.create {
@@ -78,7 +87,7 @@ impl MenuContext {
             }
         } else {
             CreateMatchRequest {
-                house_bots: Some(vec![self.args.vs.clone()]),
+                house_bots: Some(self.house_bots()),
                 settings: Some(settings),
                 ..Default::default()
             }
@@ -130,7 +139,7 @@ impl MenuContext {
                         let detail = if self.args.create {
                             format!("waiting for {} more player(s) to join it", self.args.players - 1)
                         } else {
-                            format!("vs house bot '{}'", self.args.vs)
+                            format!("vs house bot(s) {}", self.house_bots().join(", "))
                         };
                         Self::line(&format!("\r\nCreated match {} - {detail}", summary.match_id), false)?
                     },
@@ -277,7 +286,8 @@ impl MenuContext {
 
         let (name, current) = self.settings_rows()[item].clone();
         let label = match item {
-            1 | 2 => format!("{name} (blank to keep {current}): "),
+            1 => format!("{name}, comma separated (blank to keep {current}): "),
+            2 => format!("{name} (blank to keep {current}): "),
             _ => format!("{name} (blank for server default, now {current}): "),
         };
         let Some(input) = Self::prompt(&label)? else {
@@ -286,8 +296,9 @@ impl MenuContext {
 
         let result = match item {
             1 => {
-                if !input.is_empty() {
-                    self.args.vs = input;
+                let bots = Self::parse_house_bots(&input);
+                if !bots.is_empty() {
+                    self.args.vs = bots.join(",");
                 }
                 Ok(())
             }
@@ -331,7 +342,7 @@ impl MenuContext {
         let opt = |v: Option<i32>| v.map_or("server default".to_string(), |v| v.to_string());
         [
             ("Mode", self.mode_name().to_string()),
-            ("House bot", self.args.vs.clone()),
+            ("House bots", self.house_bots().join(", ")),
             ("Player seats", self.args.players.to_string()),
             ("Tick ms", opt(self.settings.tick_interval_ms)),
             ("Max ticks", opt(self.settings.max_ticks)),
@@ -391,7 +402,7 @@ impl MenuContext {
 
         // From here the stats stay pinned to the top and the log scrolls beneath them
         Self::clear_screen()?;
-        let mut screen = MatchScreen::new(self.logic.name());
+        let mut screen = MatchScreen::new(self.logic.name()).watching(self.client.watch_url(id).as_str());
         screen.log(
             &format!("Match started: slot {} on a {}x{} map", state.you.slot, map.width, map.height),
             false,
@@ -609,6 +620,15 @@ mod console_tests {
         let s = req.settings.unwrap();
         assert_eq!(s.tick_interval_ms, Some(50));
         assert_eq!(s.map_width, Some(64));
+    }
+
+    #[test]
+    fn create_request_sends_every_house_bot() {
+        let mut m = menu();
+        m.args.vs = " sitter, rusher,,sitter ".to_string();
+        let req = m.create_request();
+        assert_eq!(req.house_bots, Some(vec!["sitter".into(), "rusher".into(), "sitter".into()]));
+        assert!(req.max_players.is_none());
     }
 
     #[test]

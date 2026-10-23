@@ -218,6 +218,8 @@ struct Layout {
 pub struct MatchScreen {
     pub stats: MatchStats,
     bot: String,
+    /// Where the match can be watched in a browser, shown under the stats
+    watch: Option<String>,
     log: VecDeque<(String, bool)>,
     layout: Option<Layout>,
     /// Heat map cells as last drawn, to skip the ones that haven't changed
@@ -229,10 +231,17 @@ impl MatchScreen {
         Self {
             stats: MatchStats::new(),
             bot: bot.to_string(),
+            watch: None,
             log: VecDeque::new(),
             layout: None,
             drawn: Vec::new(),
         }
+    }
+
+    /// Shows `url` as a link to watch the match on the server.
+    pub fn watching(mut self, url: &str) -> Self {
+        self.watch = Some(url.to_string());
+        self
     }
 
     pub fn log(&mut self, text: &str, err: bool) {
@@ -289,13 +298,20 @@ impl MatchScreen {
     ) -> io::Result<()> {
         let header = self.stats.header(&self.bot, s);
         // Leave the last row empty so printing it never scrolls the terminal
-        let room = height.saturating_sub(header.len() + 2);
+        let room = height.saturating_sub(header.len() + self.watch.iter().len() + 2);
         let shown = self.log.iter().skip(self.log.len().saturating_sub(room));
         let edge = if divider { " │" } else { "" };
 
         out.queue(MoveTo(0, 0))?;
         for row in &header {
             write!(out, "{}{edge}\r\n", pad(row, width).bold())?;
+        }
+        if let Some(url) = &self.watch {
+            // Only the url is styled, so the underline stops where it does
+            let label = pad("Watch", width.min(11));
+            let shown = fit(url, width - label.chars().count());
+            let rest = pad("", width - label.chars().count() - shown.chars().count());
+            write!(out, "{}{}{rest}{edge}\r\n", label.bold(), link(url, &shown).cyan().underlined())?;
         }
         write!(out, "{}{edge}\r\n", "─".repeat(width).dark_grey())?;
         for (text, err) in shown.clone() {
@@ -386,6 +402,12 @@ fn fit(text: &str, width: usize) -> String {
 /// `text` cut or padded with spaces to exactly `width` characters.
 fn pad(text: &str, width: usize) -> String {
     format!("{:<width$}", fit(text, width))
+}
+
+/// `text` as an OSC 8 hyperlink to `url`, clickable in terminals that support it.
+/// The escapes take no columns, so `text` keeps its width.
+fn link(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
 }
 
 #[cfg(test)]

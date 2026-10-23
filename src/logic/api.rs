@@ -360,6 +360,13 @@ impl Api {
             .await
     }
 
+    /// The server's page for watching `match_id` in a browser (`/#/match/{id}`).
+    pub fn watch_url(&self, match_id: &str) -> Url {
+        let mut url = self.server.clone();
+        url.set_fragment(Some(&format!("/match/{match_id}")));
+        url
+    }
+
     /// Resolves a relative endpoint path against the base URL.
     fn url(&self, path: &str) -> Url {
         self.server.join(path).expect("valid endpoint path")
@@ -524,6 +531,17 @@ mod tests {
             api.match_url("../players", "join").as_str(),
             "http://example.io/api/v1/matches/..%2Fplayers/join"
         );
+    }
+
+    #[test]
+    fn watch_url_is_the_match_route_of_the_web_app() {
+        let api = Api::new(String::new(), "http://localhost:5080", "");
+        assert_eq!(
+            api.watch_url("90027c1d-ab99-4cfe-8a7a-4a2a6000b08e").as_str(),
+            "http://localhost:5080/#/match/90027c1d-ab99-4cfe-8a7a-4a2a6000b08e"
+        );
+        let api = Api::new(String::new(), "http://example.io/rts", "");
+        assert_eq!(api.watch_url("m1").as_str(), "http://example.io/rts/#/match/m1");
     }
 
     #[test]

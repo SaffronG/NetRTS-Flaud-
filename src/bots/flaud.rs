@@ -16,7 +16,7 @@ const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 const TARGET_WORKERS: usize = 6;
 const TARGET_SCOUTS: usize = 5;
 /// Units a building may have queued before we stop adding more
-const QUEUE_LIMIT: usize = 2;
+const QUEUE_LIMIT: usize = 4;
 /// Workers needed before we stop training them to save for the first Barracks
 const BARRACKS_AT_WORKERS: usize = 4;
 /// Same as Build in `urgency`. Training is added after the unit commands and
@@ -51,7 +51,7 @@ fn worker_brain() -> FlyBrainConnectome {
 fn army_brain() -> FlyBrainConnectome {
     FlyBrainConnectome::new(
         vec![
-            [1.2, 0.0, 0.0, 0.0],  // Attack: on the first vision spike
+            [1.2, 0.0, 0.8, 0.0],  // Attack: on the first vision spike
             [-1.5, 0.0, 0.6, 0.0], // Explore: hunt prey, but not while fighting
         ],
         DECAY,
