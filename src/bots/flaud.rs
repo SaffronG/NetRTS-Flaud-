@@ -9,12 +9,12 @@ use crate::logic::shared::{
 };
 
 const GROUP_SIZE: usize = 5;
-const DECAY: f32 = 0.8; // Determines that the minimum current possible to maybe trigger a response is (1 - DECAY)
-const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
+pub const DECAY: f32 = 0.8; // Determines that the minimum current possible to maybe trigger a response is (1 - DECAY)
+pub const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 
 // Production
-const TARGET_WORKERS: usize = 25;
-const TARGET_SCOUTS: usize = 10;
+const TARGET_WORKERS: usize = 20;
+const TARGET_SCOUTS: usize = 15;
 /// Units a building may have queued before we stop adding more
 const QUEUE_LIMIT: usize = 5;
 /// Workers needed before we stop training them to save for the first Barracks
