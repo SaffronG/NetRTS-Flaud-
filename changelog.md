@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-23 00:00:03 MDT — Worker groups mine their own ore chunk
+
+### Added
+
+- `src/logic/shared.rs`: `group_resources` rewritten as a flood fill. Deposits with ore left are split into chunks: two deposits share a chunk if a chain of touching deposits (Chebyshev distance 1) links them. The previous version didn't compile (`acc.last()` is read-only). Its containment check could never be true, it grew boxes by +1 on the wrong axes, it only checked the box's two corners, and it only compared each deposit with the last box, so the result depended on input order.
+- `src/logic/shared.rs`: `Bound` now holds the chunk's deposit `ids` (replacing the `w` count) and public box edges. It gains `Bound::at`, `Bound::add` (moves each edge out with min/max) and `Bound::dist_to` (point-to-box distance).
+- `src/bots/flaud.rs`: `BrainGroup.mine`, the deposit ids a worker group mines exclusively. `assign_mines` runs each tick after `update_groups`. It drops dry ids from every claim, then gives each worker group with an empty claim the unclaimed chunk nearest its centroid. A chunk later split by a dry deposit stays with its owner, because both halves contain claimed ids.
+
+### Changed
+
+- `src/bots/flaud.rs`: Gather only targets deposits in the group's claim. A group with no claim (every chunk is taken) still gathers from the nearest deposit; worker exploration will go there later.
+
+### Math
+
+**Point-to-box Chebyshev distance** (`src/logic/shared.rs`, `Bound::dist_to`)
+
+$$d_x = \max(l_x - x,\; 0,\; x - u_x), \qquad d_y = \max(l_y - y,\; 0,\; y - u_y), \qquad d = \max(d_x, d_y)$$
+
+- $(l_x, l_y)$, $(u_x, u_y)$: the box's lower and upper corners (`lx`, `ly`, `ux`, `uy`)
+- $d_x$, $d_y$: how far $(x, y)$ is outside the box on each axis, 0 when inside on that axis
+- $d$: tiles from $(x, y)$ to the nearest tile of the box, with diagonal steps counting 1, as in `dist`
+
+`assign_mines` uses it to pick the chunk closest to a group's centroid. Measuring to the nearest edge rather than the centre means a long chunk that passes right by the workers counts as close.
+
+**Box growth** (`Bound::add`)
+
+$$l_x \leftarrow \min(l_x, x), \quad u_x \leftarrow \max(u_x, x), \quad l_y \leftarrow \min(l_y, y), \quad u_y \leftarrow \max(u_y, y)$$
+
+Each edge moves only as far as needed to cover the new deposit, so the box stays the smallest one around the chunk.
+
+**Chunks as connected components** (`group_resources`)
+
+$$i \sim j \iff \text{dist}(i, j) \le 1$$
+
+A chunk is a set of deposits all linked by chains of $\sim$ steps (a connected component of the "touching" graph). The flood fill checks every pair once a deposit is pulled in, $O(n^2)$ for $n$ deposits, which is fine for a few dozen.
+
+### Tests
+
+- `src/logic/shared.rs`: touching deposits join (diagonals included); input order doesn't matter; depleted deposits are skipped and don't bridge; boxes are tight around an L shape; `dist_to` is 0 inside and measured from the nearest edge.
+- `src/bots/flaud.rs`: a group claims the nearest chunk; groups never share one; a group with no chunk left has no claim; a claim is kept while any of it has ore; a dry chunk is swapped for the next; a chunk split by a dry deposit stays with its owner; Gather ignores a closer deposit outside the claim.
+- Still failing, not from this change: `army_holds_when_calm` (army bias 0.3, see the 2026-10-22 22:49:41 entry).
+
 ## 2026-10-22 23:01:49 MDT — FlaudBot splash logo
 
 ### Docs

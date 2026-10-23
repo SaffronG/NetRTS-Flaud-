@@ -1,6 +1,44 @@
 use crate::logic::models::{BuildingType, *};
 use std::collections::{HashMap, HashSet};
 
+/// A chunk of touching deposits that still have ore, and the box around them.
+pub struct Bound {
+    /// Deposit ids in the chunk; its size is `ids.len()`
+    pub ids: Vec<i32>,
+    pub lx: i32,
+    pub ly: i32,
+    pub ux: i32,
+    pub uy: i32,
+}
+
+impl Bound {
+    fn at(d: &ResourceDepositDto) -> Self {
+        Self {
+            ids: vec![d.id],
+            lx: d.x,
+            ly: d.y,
+            ux: d.x,
+            uy: d.y,
+        }
+    }
+
+    /// Adds a deposit, moving each edge out only as far as it needs to go.
+    fn add(&mut self, d: &ResourceDepositDto) {
+        self.ids.push(d.id);
+        self.lx = self.lx.min(d.x);
+        self.ly = self.ly.min(d.y);
+        self.ux = self.ux.max(d.x);
+        self.uy = self.uy.max(d.y);
+    }
+
+    /// Chebyshev distance from (x, y) to the nearest tile of the box; 0 inside it.
+    pub fn dist_to(&self, x: i32, y: i32) -> i32 {
+        let dx = (self.lx - x).max(0).max(x - self.ux);
+        let dy = (self.ly - y).max(0).max(y - self.uy);
+        dx.max(dy)
+    }
+}
+
 pub const STIMULI_LOOKUP: [f64; 10] = [
     10.0,
     8.824969025845954,
@@ -220,6 +258,37 @@ pub fn enemy_base(s: &GameStateDto) -> PositionDto {
         })
 }
 
+/// Splits the deposits with ore left into chunks a worker group can mine alone.
+/// Two deposits share a chunk if a chain of deposits each touching the next
+/// (Chebyshev distance 1) links them, so input order doesn't matter.
+pub fn group_resources(deposits: &[ResourceDepositDto]) -> Vec<Bound> {
+    let live: Vec<&ResourceDepositDto> = deposits.iter().filter(|d| d.remaining > 0).collect();
+    let mut seen = vec![false; live.len()];
+    let mut chunks = Vec::new();
+
+    for start in 0..live.len() {
+        if seen[start] {
+            continue;
+        }
+        // Flood fill: keep pulling in unseen deposits touching any already in the chunk
+        seen[start] = true;
+        let mut chunk = Bound::at(live[start]);
+        let mut frontier = vec![start];
+        while let Some(i) = frontier.pop() {
+            for j in 0..live.len() {
+                if !seen[j] && dist(live[i].x, live[i].y, live[j].x, live[j].y) <= 1 {
+                    seen[j] = true;
+                    chunk.add(live[j]);
+                    frontier.push(j);
+                }
+            }
+        }
+        chunks.push(chunk);
+    }
+    chunks
+}
+
+/// Calculates the chebyshev distance between source and target
 pub fn dist(sx: i32, sy: i32, tx: i32, ty: i32) -> i32 {
     (sx - tx).abs().max((sy - ty).abs())
 }
@@ -755,6 +824,71 @@ mod tests {
     fn find_site_is_none_when_boxed_in() {
         let s = state(20, 20, vec![], vec![]);
         assert_eq!(find_site(&vec!["#".repeat(20); 20], &s, 10, 10), None);
+    }
+
+    // --- group_resources ---
+
+    fn chunk_ids(chunks: &[Bound]) -> Vec<Vec<i32>> {
+        let mut ids: Vec<Vec<i32>> = chunks
+            .iter()
+            .map(|c| {
+                let mut ids = c.ids.clone();
+                ids.sort();
+                ids
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn group_resources_joins_touching_deposits_diagonals_included() {
+        let deposits = vec![deposit(1, 0, 0, 50), deposit(2, 1, 1, 50), deposit(3, 5, 5, 50)];
+        assert_eq!(chunk_ids(&group_resources(&deposits)), vec![vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn group_resources_ignores_input_order() {
+        // 3 sits between 1 and 2 but comes last; a one-pass scan would split them
+        let deposits = vec![deposit(1, 0, 0, 50), deposit(2, 2, 0, 50), deposit(3, 1, 0, 50)];
+        assert_eq!(chunk_ids(&group_resources(&deposits)), vec![vec![1, 2, 3]]);
+
+        let far_between = vec![deposit(1, 0, 0, 50), deposit(2, 10, 10, 50), deposit(3, 1, 0, 50)];
+        assert_eq!(
+            chunk_ids(&group_resources(&far_between)),
+            vec![vec![1, 3], vec![2]]
+        );
+    }
+
+    #[test]
+    fn group_resources_skips_depleted_deposits() {
+        // An empty deposit is neither mined nor a bridge between its neighbours
+        let deposits = vec![deposit(1, 0, 0, 50), deposit(2, 1, 0, 0), deposit(3, 2, 0, 50)];
+        assert_eq!(chunk_ids(&group_resources(&deposits)), vec![vec![1], vec![3]]);
+        assert!(group_resources(&[deposit(1, 0, 0, 0)]).is_empty());
+        assert!(group_resources(&[]).is_empty());
+    }
+
+    #[test]
+    fn group_resources_boxes_each_chunk_tightly() {
+        // An L shape: the box grows only along the axes that need it
+        let chunks = group_resources(&[
+            deposit(1, 4, 6, 50),
+            deposit(2, 5, 6, 50),
+            deposit(3, 5, 7, 50),
+        ]);
+        let c = &chunks[0];
+        assert_eq!((c.lx, c.ly, c.ux, c.uy), (4, 6, 5, 7));
+    }
+
+    #[test]
+    fn bound_dist_to_is_zero_inside_and_counts_from_the_nearest_edge() {
+        let b = &group_resources(&[deposit(1, 2, 2, 50), deposit(2, 3, 2, 50), deposit(3, 4, 2, 50)])[0];
+        assert_eq!(b.dist_to(3, 2), 0, "inside");
+        assert_eq!(b.dist_to(3, 3), 1, "below the middle, not near a corner");
+        assert_eq!(b.dist_to(5, 3), 1, "diagonal to a corner");
+        assert_eq!(b.dist_to(0, 2), 2, "left of the box");
+        assert_eq!(b.dist_to(10, 9), 7, "the larger axis wins");
     }
 
     // --- enemy_base ---

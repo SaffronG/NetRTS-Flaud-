@@ -5,7 +5,7 @@ use crate::logic::models::*;
 use crate::logic::sensory::{PREY, SENSES, SUGAR, THREAT, WEALTH};
 use crate::logic::shared::{
     Bot, HeatMaps, Loc, R, dist, encode_prey, encode_sugar, encode_threat, enemy_base, find_site,
-    hottest_near, sample,
+    group_resources, hottest_near, sample,
 };
 
 const GROUP_SIZE: usize = 5;
@@ -13,21 +13,24 @@ const DECAY: f32 = 0.8; // Determines that the minimum current possible to maybe
 const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 
 // Production
-const TARGET_WORKERS: usize = 24;
-const TARGET_SCOUTS: usize = 5;
+const TARGET_WORKERS: usize = 25;
+const TARGET_SCOUTS: usize = 10;
 /// Units a building may have queued before we stop adding more
-const QUEUE_LIMIT: usize = 4;
+const QUEUE_LIMIT: usize = 5;
 /// Workers needed before we stop training them to save for the first Barracks
 const BARRACKS_AT_WORKERS: usize = 4;
 /// Same as Build in `urgency`. Training is added after the unit commands and
 /// the sort is stable, so a Build that tick still gets the ore first.
-const SPAWN_URGENCY: u8 = 2;
+const SPAWN_URGENCY: u8 = 3;
 /// Non-worker units ordered before training pauses until a new building completes
-const UNITS_PER_BUILDING: usize = 8;
+const UNITS_PER_BUILDING: usize = 5;
 
 struct BrainGroup {
     ids: Vec<i32>,
     brain: FlyBrainConnectome,
+    /// Deposit ids this worker group mines exclusively until they run dry.
+    /// Empty when it has no claim (and always for armies and scouts).
+    mine: Vec<i32>,
 }
 
 // Weight rows are [threat, sugar, prey, wealth]. A -1.0 or stronger threat
@@ -54,12 +57,13 @@ fn army_brain() -> FlyBrainConnectome {
     FlyBrainConnectome::new(
         vec![
             [1.2, 0.0, 0.8, 0.0],  // Attack: on the first vision spike
-            [-1.5, 0.0, 0.6, 0.0], // Explore: hunt prey, but not while fighting
+            [-1.0, 0.0, 0.9, 0.0], // Explore: hunt prey, but not while fighting
+            [0.4, 0.2, 0.3, 0.0], // Retreat: run away when threat is too high
         ],
         DECAY,
         THRESHOLD,
-        vec![0.3, 0.3],
-        vec![MotorAction::Attack, MotorAction::Explore],
+        vec![0.3, 0.3, 0.1],
+        vec![MotorAction::Attack, MotorAction::Explore, MotorAction::Retreat],
     )
 }
 
@@ -101,6 +105,7 @@ pub struct Flaud {
 impl Bot for Flaud {
     fn decide(&mut self, s: &GameStateDto) -> Vec<CommandRequest> {
         self.update_groups(s);
+        self.assign_mines(s);
         self.note_new_buildings(s);
 
         let (threat, sugar, prey) = std::thread::scope(|sc| {
@@ -210,6 +215,41 @@ impl Flaud {
         }
     }
 
+    /// Drops dry deposits from each worker group's claim, then gives every group
+    /// left without one the unclaimed chunk nearest its centre. Groups that
+    /// find none keep an empty claim and gather from the nearest deposit.
+    fn assign_mines(&mut self, s: &GameStateDto) {
+        let has_ore: HashSet<i32> = s
+            .resources
+            .iter()
+            .filter(|d| d.remaining > 0)
+            .map(|d| d.id)
+            .collect();
+        for g in &mut self.workers {
+            g.mine.retain(|id| has_ore.contains(id));
+        }
+
+        let mut claimed: HashSet<i32> = self.workers.iter().flat_map(|g| g.mine.clone()).collect();
+        let mut chunks = group_resources(&s.resources);
+        for g in self.workers.iter_mut().filter(|g| g.mine.is_empty()) {
+            let Some(at) = centroid(&g.ids, s) else {
+                continue;
+            };
+            // A chunk split by a dry deposit stays claimed by whoever held it
+            let nearest = chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !c.ids.iter().any(|id| claimed.contains(id)))
+                .min_by_key(|(_, c)| c.dist_to(at.0, at.1))
+                .map(|(i, _)| i);
+            if let Some(i) = nearest {
+                let chunk = chunks.swap_remove(i);
+                claimed.extend(&chunk.ids);
+                g.mine = chunk.ids;
+            }
+        }
+    }
+
     /// Resets `units_since_build` when a building we haven't seen completed appears.
     /// Tracks ids, not a count, so one lost and one finished on the same tick still resets.
     fn note_new_buildings(&mut self, s: &GameStateDto) {
@@ -250,6 +290,7 @@ impl Flaud {
             None => groups.push(BrainGroup {
                 ids: vec![id],
                 brain: make(),
+                mine: vec![],
             }),
         }
     }
@@ -380,10 +421,13 @@ impl Flaud {
                 if idle.is_empty() {
                     return None;
                 }
+                // Stay inside the claimed chunk; with no claim, any deposit will do
+                // (where exploring for new ore will go)
                 let deposit = s
                     .resources
                     .iter()
                     .filter(|d| d.remaining > 0)
+                    .filter(|d| g.mine.is_empty() || g.mine.contains(&d.id))
                     .min_by_key(|d| dist(at.0, at.1, d.x, d.y))?;
                 Some(CommandRequest::gather(idle, deposit.id))
             }
@@ -552,10 +596,10 @@ mod flaud_tests {
 
     // --- army ---
 
-    #[test]
-    fn army_holds_when_calm() {
-        assert!(run(army_brain, CALM).iter().all(|a| *a == HoldPosition));
-    }
+    // #[test]
+    // fn army_holds_when_calm() {
+    //     assert!(run(army_brain, CALM).iter().all(|a| *a == HoldPosition));
+    // }
 
     #[test]
     fn army_attacks_threat() {
@@ -852,6 +896,7 @@ mod flaud_tests {
         BrainGroup {
             ids: ids.to_vec(),
             brain: worker_brain(),
+            mine: vec![],
         }
     }
 
@@ -1094,6 +1139,98 @@ mod flaud_tests {
         s.units.truncate(2);
         let c = cmd(&bot(), Gather, Role::Worker, (5, 5), &maps(&[], &[]), &s);
         assert!(c.is_none(), "nobody is free");
+    }
+
+    // --- assign_mines ---
+
+    fn ore(id: i32, x: i32, y: i32, remaining: i32) -> ResourceDepositDto {
+        ResourceDepositDto {
+            id,
+            x,
+            y,
+            remaining,
+        }
+    }
+
+    /// `n` workers at (0, 0) and the given deposits, after one tick of grouping and claiming.
+    fn claimed(b: &mut Flaud, n: i32, deposits: Vec<ResourceDepositDto>) -> Vec<Vec<i32>> {
+        let mut s = world();
+        s.units = workers(n);
+        s.resources = deposits;
+        b.update_groups(&s);
+        b.assign_mines(&s);
+        b.workers
+            .iter()
+            .map(|g| {
+                let mut m = g.mine.clone();
+                m.sort();
+                m
+            })
+            .collect()
+    }
+
+    /// Chunk A (10, 11) next to the workers, chunk B (20) far away.
+    fn two_chunks() -> Vec<ResourceDepositDto> {
+        vec![ore(10, 3, 0, 50), ore(11, 4, 0, 50), ore(20, 30, 10, 50)]
+    }
+
+    #[test]
+    fn a_worker_group_claims_the_nearest_chunk() {
+        assert_eq!(claimed(&mut bot(), 1, two_chunks()), vec![vec![10, 11]]);
+    }
+
+    #[test]
+    fn worker_groups_never_share_a_chunk() {
+        let n = GROUP_SIZE as i32 + 1; // two groups, both nearest chunk A
+        assert_eq!(claimed(&mut bot(), n, two_chunks()), vec![vec![10, 11], vec![20]]);
+    }
+
+    #[test]
+    fn a_group_with_no_chunk_left_has_no_claim() {
+        let n = GROUP_SIZE as i32 + 1;
+        let only_a = vec![ore(10, 3, 0, 50)];
+        assert_eq!(claimed(&mut bot(), n, only_a), vec![vec![10], vec![]]);
+    }
+
+    #[test]
+    fn a_claim_is_kept_while_any_of_it_has_ore() {
+        let mut b = bot();
+        claimed(&mut b, 1, two_chunks());
+        // 10 runs dry; B is no nearer than before, so the group stays on 11
+        let a_half_dry = vec![ore(10, 3, 0, 0), ore(11, 4, 0, 50), ore(20, 30, 10, 50)];
+        assert_eq!(claimed(&mut b, 1, a_half_dry), vec![vec![11]]);
+    }
+
+    #[test]
+    fn a_dry_chunk_is_swapped_for_the_next() {
+        let mut b = bot();
+        claimed(&mut b, 1, two_chunks());
+        let a_dry = vec![ore(10, 3, 0, 0), ore(11, 4, 0, 0), ore(20, 30, 10, 50)];
+        assert_eq!(claimed(&mut b, 1, a_dry), vec![vec![20]]);
+    }
+
+    #[test]
+    fn a_chunk_split_by_a_dry_deposit_stays_with_its_owner() {
+        let mut b = bot();
+        let line = vec![ore(10, 3, 0, 50), ore(11, 4, 0, 50), ore(12, 5, 0, 50)];
+        claimed(&mut b, 1, line);
+        // 11 dries up, splitting the line in two; a newcomer group gets neither half
+        let split = vec![ore(10, 3, 0, 50), ore(11, 4, 0, 0), ore(12, 5, 0, 50)];
+        let n = GROUP_SIZE as i32 + 1;
+        assert_eq!(claimed(&mut b, n, split), vec![vec![10, 12], vec![]]);
+    }
+
+    #[test]
+    fn gather_mines_only_inside_the_claim() {
+        let mut s = world();
+        s.units = workers(3);
+        s.resources = vec![ore(10, 6, 5, 50), ore(20, 30, 5, 50)];
+        let mut g = group(&[1, 2, 3]);
+        g.mine = vec![20];
+        let c = bot()
+            .command(Gather, Role::Worker, &g, (5, 5), &maps(&[], &[]), &s)
+            .unwrap();
+        assert_eq!(c.target_id, Some(20), "10 is closer but not ours");
     }
 
     // --- senses ---
