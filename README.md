@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/resources/FlaudLogo.png" alt="FlaudBot: fly-brain bot written in Rust" width="600">
+</p>
+
 # NetRTS(Flaud)
 
 A bot for a simplified version of StarCraft (NetRTS) for the SnowCollege coding competition 2026-2027.

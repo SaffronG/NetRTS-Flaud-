@@ -13,7 +13,7 @@ const DECAY: f32 = 0.8; // Determines that the minimum current possible to maybe
 const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 
 // Production
-const TARGET_WORKERS: usize = 6;
+const TARGET_WORKERS: usize = 24;
 const TARGET_SCOUTS: usize = 5;
 /// Units a building may have queued before we stop adding more
 const QUEUE_LIMIT: usize = 4;
@@ -22,6 +22,8 @@ const BARRACKS_AT_WORKERS: usize = 4;
 /// Same as Build in `urgency`. Training is added after the unit commands and
 /// the sort is stable, so a Build that tick still gets the ore first.
 const SPAWN_URGENCY: u8 = 2;
+/// Non-worker units ordered before training pauses until a new building completes
+const UNITS_PER_BUILDING: usize = 8;
 
 struct BrainGroup {
     ids: Vec<i32>,
@@ -56,7 +58,7 @@ fn army_brain() -> FlyBrainConnectome {
         ],
         DECAY,
         THRESHOLD,
-        vec![0.0, 0.0],
+        vec![0.3, 0.3],
         vec![MotorAction::Attack, MotorAction::Explore],
     )
 }
@@ -90,11 +92,16 @@ pub struct Flaud {
     rules: RulesDto,
     /// Kept from the last tick so the match screen can draw them
     heat: Option<HeatMaps>,
+    /// Non-worker units ordered since a building last completed
+    units_since_build: usize,
+    /// Ids of completed buildings seen so far; a new one resets `units_since_build`
+    built: HashSet<i32>,
 }
 
 impl Bot for Flaud {
     fn decide(&mut self, s: &GameStateDto) -> Vec<CommandRequest> {
         self.update_groups(s);
+        self.note_new_buildings(s);
 
         let (threat, sugar, prey) = std::thread::scope(|sc| {
             let threat = sc.spawn(|| encode_threat(s));
@@ -142,7 +149,13 @@ impl Bot for Flaud {
         ranked.sort_by_key(|(u, _)| *u);
 
         let room = (s.you.queue_capacity - s.you.queued_commands).max(0) as usize;
-        let commands = ranked.into_iter().take(room).map(|(_, c)| c).collect();
+        let commands: Vec<CommandRequest> =
+            ranked.into_iter().take(room).map(|(_, c)| c).collect();
+        // Counted after the cut, so an order dropped for lack of room isn't charged
+        self.units_since_build += commands
+            .iter()
+            .filter(|c| c.kind == CommandType::Produce && c.unit_type != Some(UnitType::Worker))
+            .count();
         self.heat = Some(maps);
         commands
     }
@@ -160,6 +173,8 @@ impl Bot for Flaud {
             map: m,
             rules: r,
             heat: None,
+            units_since_build: 0,
+            built: HashSet::new(),
         }
     }
 }
@@ -191,6 +206,16 @@ impl Flaud {
                 UnitType::Soldier | UnitType::Archer => {
                     Self::join(&mut self.armies, u.id, army_brain)
                 }
+            }
+        }
+    }
+
+    /// Resets `units_since_build` when a building we haven't seen completed appears.
+    /// Tracks ids, not a count, so one lost and one finished on the same tick still resets.
+    fn note_new_buildings(&mut self, s: &GameStateDto) {
+        for b in s.my_buildings().filter(|b| b.completed) {
+            if self.built.insert(b.id) {
+                self.units_since_build = 0;
             }
         }
     }
@@ -256,6 +281,9 @@ impl Flaud {
 
         // Spend from a running total so one tick can't order more than we can pay for
         let mut ore = s.you.resources;
+        // Non-workers left before we wait for a building; workers are exempt so
+        // losing them all mid-pause can't leave nobody to build the next one
+        let mut allowed = UNITS_PER_BUILDING.saturating_sub(self.units_since_build);
         let mut orders = Vec::new();
         for b in s
             .my_buildings()
@@ -267,8 +295,12 @@ impl Flaud {
             let Some(cost) = self.rules.unit(kind).map(|u| u.cost) else {
                 continue;
             };
-            if ore < cost {
+            let is_worker = kind == UnitType::Worker;
+            if ore < cost || (!is_worker && allowed == 0) {
                 continue;
+            }
+            if !is_worker {
+                allowed -= 1;
             }
             ore -= cost;
             *count.entry(kind).or_default() += 1;
@@ -1053,7 +1085,11 @@ mod flaud_tests {
         s.units = vec![walking, building, mine(3, UnitType::Worker)];
 
         let c = cmd(&bot(), Gather, Role::Worker, (5, 5), &maps(&[], &[]), &s).unwrap();
-        assert_eq!(c.unit_ids, Some(vec![3]), "1 and 2 are on their way to build");
+        assert_eq!(
+            c.unit_ids,
+            Some(vec![3]),
+            "1 and 2 are on their way to build"
+        );
 
         s.units.truncate(2);
         let c = cmd(&bot(), Gather, Role::Worker, (5, 5), &maps(&[], &[]), &s);
@@ -1469,6 +1505,73 @@ mod flaud_tests {
             orders.iter().any(|c| c.kind == CommandType::Produce),
             "{orders:?}"
         );
+    }
+
+    // --- waiting for a building every UNITS_PER_BUILDING units ---
+
+    /// Ample ore and queue room, so only the building pause can stop training.
+    fn rich(buildings: Vec<BuildingDto>) -> GameStateDto {
+        let mut s = base(100_000, buildings, vec![]);
+        s.you.queue_capacity = 10;
+        s.you.queued_commands = 0;
+        s
+    }
+
+    fn produced(orders: &[CommandRequest]) -> usize {
+        orders.iter().filter(|c| c.kind == CommandType::Produce).count()
+    }
+
+    #[test]
+    fn training_pauses_after_the_limit_until_a_building_completes() {
+        // One Barracks orders one unit a tick, so the limit is reached in exactly N ticks
+        let mut b = trainer_bot();
+        let s = rich(vec![barracks(501)]);
+        for tick in 0..UNITS_PER_BUILDING {
+            assert_eq!(produced(&b.decide(&s)), 1, "tick {tick}");
+        }
+        assert_eq!(produced(&b.decide(&s)), 0, "waiting for a building");
+        assert_eq!(produced(&b.decide(&s)), 0, "still waiting");
+
+        let s = rich(vec![barracks(501), barracks(502)]);
+        assert_eq!(produced(&b.decide(&s)), 2, "a new building resumes training");
+    }
+
+    #[test]
+    fn an_unfinished_building_does_not_end_the_pause() {
+        let mut b = trainer_bot();
+        let mut site = barracks(502);
+        site.completed = false;
+        b.decide(&rich(vec![barracks(501)])); // 501 seen; it no longer resets the count
+        b.units_since_build = UNITS_PER_BUILDING;
+        assert_eq!(produced(&b.decide(&rich(vec![barracks(501), site]))), 0);
+    }
+
+    #[test]
+    fn one_tick_never_orders_past_the_limit() {
+        let mut b = trainer_bot();
+        b.decide(&rich(vec![barracks(501), barracks(502)])); // both seen, 2 counted
+        b.units_since_build = UNITS_PER_BUILDING - 1;
+        let orders = b.decide(&rich(vec![barracks(501), barracks(502)]));
+        assert_eq!(trained(&orders), vec![(501, UnitType::Scout)]);
+    }
+
+    #[test]
+    fn workers_keep_training_during_the_pause() {
+        let mut b = trainer_bot();
+        b.decide(&rich(vec![cc(), barracks(501)]));
+        b.units_since_build = UNITS_PER_BUILDING;
+        let orders = b.decide(&rich(vec![cc(), barracks(501)]));
+        assert_eq!(trained(&orders), vec![(500, UnitType::Worker)]);
+        assert_eq!(b.units_since_build, UNITS_PER_BUILDING, "workers aren't counted");
+    }
+
+    #[test]
+    fn orders_dropped_for_lack_of_room_are_not_counted() {
+        let mut b = trainer_bot();
+        let mut s = rich(vec![barracks(501)]);
+        s.you.queued_commands = s.you.queue_capacity;
+        assert!(b.decide(&s).is_empty());
+        assert_eq!(b.units_since_build, 0);
     }
 
     #[test]

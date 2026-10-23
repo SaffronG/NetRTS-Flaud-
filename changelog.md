@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-10-22 23:01:49 MDT — FlaudBot splash logo
+
+### Docs
+
+- `README.md`: added `src/resources/FlaudLogo.png` as a centred splash logo above the title, 600px wide. It uses an HTML `<p align="center">`, since Markdown image syntax can't centre on GitHub.
+
+## 2026-10-22 22:50:19 MDT — CLAUDE.md: I write the code
+
+### Changed
+
+- `CLAUDE.md`: new section 0. Claude doesn't edit source code unless explicitly asked to implement or write it. "How can I…" or "fix this" means a walkthrough. Claude may still read, search, run `cargo build`/`cargo test` and update `changelog.md` and `CLAUDE.md`. Permission to write code covers only the task it was given for.
+- `CLAUDE.md`: walkthroughs now describe each step (where, what, why, pitfalls) and stop so I can write it. Snippets appear only where an idea needs one. Claude reviews each finished step, runs the build and tests, gives hints that get more specific when I'm stuck, and describes tests instead of writing them.
+- `CLAUDE.md`: changelog entries cover code changes whoever wrote them. For my own work, the entry is written once it builds and describes the code as I actually wrote it.
+
+## 2026-10-22 22:49:41 MDT — Flaud waits for a building every 8 units
+
+### Added
+
+- `src/bots/flaud.rs`: `UNITS_PER_BUILDING` (8). After ordering that many non-worker units, Flaud stops training them until a new building completes. Ore saved during the pause raises the wealth sense, which pushes the worker brain toward Build.
+- `src/bots/flaud.rs`: `units_since_build` and `built` fields, and `note_new_buildings`, called at the top of `decide`. It resets the counter whenever a completed building id appears that hasn't been seen before. Tracking ids rather than a count means a building lost and another finished on the same tick still resets.
+- `src/bots/flaud.rs`: `spawn_units` keeps a running `allowed` total, like its ore total, so one tick with several Barracks can't go past the limit.
+
+### Changed
+
+- `src/bots/flaud.rs`: `decide` adds the non-worker `Produce` orders that survive the `take(room)` cut to `units_since_build`. Orders dropped for lack of queue room aren't counted.
+- `src/bots/flaud.rs`: Workers are exempt. They neither count toward the limit nor pause, so losing every worker mid-pause can't leave nobody to build the building that ends it.
+
+### Removed
+
+- `src/bots/flaud.rs`: `build_flag` and `BUILDING_UNIT_RATIO`. Mutating `self.build_flag` inside the `decide` iterator chain didn't compile (E0500: the `filter_map` closure already borrowed `self`). It also never held units back, only changed their urgency. And it relied on an exact `!= 1.0` float comparison that only works for ratios that are powers of two.
+
+### Math
+
+**Training allowance** (`src/bots/flaud.rs`, `spawn_units` and `decide`)
+
+$$a_t = \max(0,\; N - c_t), \qquad c_{t+1} = \begin{cases} 0 & \text{a new building completed at tick } t \\ c_t + k_t & \text{otherwise} \end{cases}$$
+
+- $N$: `UNITS_PER_BUILDING`, 8
+- $c_t$: non-worker units ordered since the last new building (`units_since_build`)
+- $a_t$: non-worker orders still allowed this tick (`allowed`, where `saturating_sub` computes $\max(0, \cdot)$ without underflow)
+- $k_t \le a_t$: non-worker `Produce` orders actually sent after the queue-room cut
+
+Once $c_t$ reaches $N$, $a_t = 0$, so only workers train until a building finishes and $c$ resets to 0.
+
+### Tests
+
+- `src/bots/flaud.rs`: training stops after `UNITS_PER_BUILDING` ticks and resumes when a new Barracks completes. An unfinished building doesn't end the pause. One tick with two Barracks stops at the limit. Workers keep training and aren't counted. Orders dropped for lack of room aren't counted.
+- Known failure, not from this change: `army_holds_when_calm` fails because of the uncommitted army bias change `[0.0, 0.0]` → `[0.3, 0.3]`. Bias alone levels off at $V^* = b/(1-\lambda) = 0.3/0.2 = 1.5 \ge \theta$, so a calm army fires about every 5 ticks.
+
+## 2026-10-22 22:30:58 MDT — CLAUDE.md with guided learning mode
+
+### Added
+
+- `CLAUDE.md`: project guide for Claude Code. It sets up guided learning mode: implementations are explained, built in small steps and walked through; code reviews go one file or hunk at a time with issues tagged by severity; every change gets a `changelog.md` entry.
+- `CLAUDE.md`: equations must be written as GitHub math, with each symbol defined, a plain-words explanation and the file location. Entries that change math or tuning get a `### Math` section.
+- `CLAUDE.md`: reference list of the current fly-brain equations (LIF update and reset, sensory gain encoding, motor input current, winner selection with lateral inhibition).
+
 ## 2026-10-22 11:49:39 MDT — `--name` uses the `.env` key, or registers and saves one
 
 ### Changed
