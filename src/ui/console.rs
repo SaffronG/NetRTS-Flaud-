@@ -3,7 +3,7 @@ use crate::bots::flaud::Flaud;
 use crate::bots::rustala::RustalaDaora;
 use crate::bots::test_bot::TestBot;
 use crate::logic::api::Api;
-use crate::logic::models::*;
+use crate::data::models::*;
 use crate::logic::shared::Bot;
 use crate::ui::match_screen::MatchScreen;
 use crate::ui::startup::Args;

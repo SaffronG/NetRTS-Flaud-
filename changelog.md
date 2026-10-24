@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-10-24 01:17:05 MDT — CI schema drift step
+
+### Added
+
+- `.github/workflows/rust.yml`: a `Schema drift` step between Build and Run tests. It runs `models_match_the_live_spec` against the live server and writes a job summary listing Breaking, Warn, Stale and Info, with a count for each. Breaking lines also become `::error` annotations and warn lines `::warning`, so they show up on the PR. Any breaking difference fails the step, and GitHub then skips every later step, so a deploy added below it can't run. If the check fails without reporting any breaking difference (e.g. the server is down), the step also fails, with an annotation saying the check didn't run.
+
+### Fixed
+
+- `src/data/models.rs`: `BuildingType::SeigeWorkshop` is now `SiegeWorkshop` (you fixed this), so `models_match_the_saved_spec` passes and the bot decodes `/rules` again.
+
+### Tests
+
+- Ran the step's script locally against fake output. With breaking lines it exits 101, prints one `::error` per breaking line (duplicates from the panic message removed) and writes the summary. With a network-style failure it exits 101 with the "didn't run" error. Against the live server it exits 0 with 0 breaking, 1 warn (`MatchId`) and 17 info.
+
+## 2026-10-24 01:10:55 MDT — Models move to `src/data`, plus a schema drift check
+
+### Changed
+
+- `src/data/models.rs`: moved from `src/logic/models.rs` (`git mv`, contents unchanged apart from the derive below). `src/logic` now only holds the API client and the brain. Every `use crate::logic::models` is now `use crate::data::models`: `src/bots/{flaud,mod,rustala,test_bot}.rs`, `src/logic/{api,shared}.rs` and `src/ui/{console,match_screen}.rs`. `src/main.rs` declares `pub mod data`, and `src/logic/mod.rs` drops `pub mod models`.
+- `src/data/models.rs`: every DTO and enum gets `#[cfg_attr(test, derive(schemars::JsonSchema))]`, so test builds can describe the JSON each type accepts. Release builds don't change.
+- `Cargo.toml`: `schemars = "1"` under `[dev-dependencies]`.
+
+### Added
+
+- `src/data/schema_drift.rs`: builds JSON Schemas for our models with `schemars`, which reads the serde `rename`/`rename_all`/`default`/`Option` attributes, and diffs them against the server's OpenAPI spec, matching by type name. It reports:
+  - **breaking**: a spec enum value we lack (unless the enum has an `Unknown` catch-all), a required field of ours missing from the spec, or a field whose type differs
+  - **warn**: one of our types has no schema with that name in the spec
+  - **stale**: we model an enum value or optional field the spec no longer has
+  - **info**: a spec field we don't model, which serde skips
+  
+  Types are compared as rough kinds (`integer`, `string`, `array<T>`, a schema name), so .NET's `["integer", "string"]` integers and `oneOf [null, $ref]` nullables match schemars' `integer` and `anyOf [$ref, null]`.
+- `src/data/fixtures/openapi.json`: the spec from `https://netrts.snowse.io/openapi/v1.json` as of this entry, pretty-printed so updates show as readable diffs.
+
+### Tests
+
+- `models_match_the_saved_spec` (runs in CI): prints the report against the fixture and fails on any breaking difference. **It fails right now**: `BuildingType` has `SeigeWorkshop`, but the server sends `SiegeWorkshop`. This is the decode error that stopped the bot joining games.
+- `models_match_the_live_spec` (`#[ignore]`, needs the network): runs the same check against the live server. With `UPDATE_SPEC=1` it also saves the spec as the fixture first.
+- `diff_tests`: the diff on hand-written schemas. Covers a missing enum value (breaking), an extra one (stale), `null` in a .NET enum (ignored), a real schemars `#[serde(other)] Unknown` enum (downgraded to info), a skipped spec field (info), required vs optional fields missing from the spec, a type mismatch, the .NET and schemars encodings of the same types agreeing, a missing type (warn), breaking sorting first, and nested types being collected under their Rust names.
+
 ## 2026-10-23 00:00:03 MDT — Worker groups mine their own ore chunk
 
 ### Added

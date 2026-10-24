@@ -18,5 +18,28 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
+    # Diffs src/data/models.rs against the live server spec. Any [breaking]
+    # difference fails this step, which skips every step (and deploy) after it.
+    - name: Schema drift
+      shell: bash
+      run: |
+        # Keep going after a failing test so the summary is still written
+        set +e
+        cargo test --quiet data::schema_drift::models_match_the_live_spec -- --exact --ignored --nocapture 2>&1 | tee drift.log
+        status=${PIPESTATUS[0]}
+        {
+          echo "## Schema drift vs live server spec"
+          for sev in breaking warn stale info; do
+            grep "^\[$sev\]" drift.log | sort -u > "$sev.txt" || true
+            echo "### ${sev^} ($(wc -l < "$sev.txt"))"
+            sed 's/^\[[a-z]*\] /- /' "$sev.txt"
+          done
+        } >> "$GITHUB_STEP_SUMMARY"
+        sed 's/^\[breaking\] /::error title=Schema drift (breaking)::/' breaking.txt
+        sed 's/^\[warn\] /::warning title=Schema drift (warn)::/' warn.txt
+        if [ "$status" -ne 0 ] && [ ! -s breaking.txt ]; then
+          echo "::error title=Schema drift::check failed to run, see the log above (is the server up?)"
+        fi
+        exit $status
     - name: Run tests
       run: cargo test --verbose

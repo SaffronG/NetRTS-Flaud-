@@ -1,4 +1,4 @@
-use crate::logic::models::*;
+use crate::data::models::*;
 use crate::logic::shared::HeatMaps;
 use crossterm::QueueableCommand;
 use crossterm::cursor::MoveTo;

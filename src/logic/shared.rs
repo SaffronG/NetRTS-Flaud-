@@ -1,4 +1,4 @@
-use crate::logic::models::{BuildingType, *};
+use crate::data::models::{BuildingType, *};
 use std::collections::{HashMap, HashSet};
 
 /// A chunk of touching deposits that still have ore, and the box around them.

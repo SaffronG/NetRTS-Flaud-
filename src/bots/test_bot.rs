@@ -3,7 +3,7 @@
 //! Strategy: mine with ~10 workers, build one Barracks, train soldiers non-stop and
 //! attack-move to the enemy's start position once 6 soldiers are ready.
 
-use crate::logic::models::*;
+use crate::data::models::*;
 use crate::logic::shared::*;
 use std::collections::HashMap;
 

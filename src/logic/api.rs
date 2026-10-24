@@ -17,7 +17,7 @@
 //! [`ApiError::Status`] carrying the server's `{"code", "message"}` body, so
 //! callers can branch on codes like `NAME_TAKEN` or `MATCH_NOT_STARTED`.
 
-use crate::logic::models::*;
+use crate::data::models::*;
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;

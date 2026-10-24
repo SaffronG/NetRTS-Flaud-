@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::logic::connectome::{FlyBrainConnectome, MotorAction};
-use crate::logic::models::*;
+use crate::data::models::*;
 use crate::logic::sensory::{PREY, SENSES, SUGAR, THREAT, WEALTH};
 use crate::logic::shared::{
     Bot, HeatMaps, Loc, R, dist, encode_prey, encode_sugar, encode_threat, enemy_base, find_site,
@@ -211,6 +211,7 @@ impl Flaud {
                 UnitType::Soldier | UnitType::Archer => {
                     Self::join(&mut self.armies, u.id, army_brain)
                 }
+                _ => (),
             }
         }
     }

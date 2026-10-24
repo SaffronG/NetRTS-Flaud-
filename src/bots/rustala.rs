@@ -1,4 +1,4 @@
-use crate::logic::models::*;
+use crate::data::models::*;
 use crate::logic::shared::Bot;
 
 pub struct RustalaDaora {}

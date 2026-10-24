@@ -34,7 +34,7 @@ impl BotLogic {
 
 #[cfg(test)]
 pub mod fixtures {
-    use crate::logic::models::*;
+    use crate::data::models::*;
     use serde_json::json;
 
     pub fn map() -> MapDto {

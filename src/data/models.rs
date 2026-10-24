@@ -1,23 +1,28 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum UnitType {
     Worker,
     Soldier,
     Archer,
     Scout,
+    Trebuchet,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum BuildingType {
     CommandCenter,
     Barracks,
     ResourceDepot,
     TechLab,
     GuardTower,
+    SiegeWorkshop,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum UpgradeType {
     Weapons1,
     Weapons2,
@@ -27,9 +32,11 @@ pub enum UpgradeType {
     Mobility2,
     Harvesting1,
     Harvesting2,
+    SiegeEngineering,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum CommandType {
     Move,
     Attack,
@@ -42,6 +49,7 @@ pub enum CommandType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum UnitActivity {
     Idle,
     Moving,
@@ -52,6 +60,7 @@ pub enum UnitActivity {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum MatchStatus {
     Waiting,
     Active,
@@ -59,6 +68,7 @@ pub enum MatchStatus {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum MatchEndReason {
     Elimination,
     TimeLimit,
@@ -66,18 +76,21 @@ pub enum MatchEndReason {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct ApiErrorDto {
     pub code: String,
     pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct PositionDto {
     pub x: i32,
     pub y: i32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ScoreDto {
     pub destruction: i32,
@@ -87,6 +100,7 @@ pub struct ScoreDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchOutcomeDto {
     pub reason: MatchEndReason,
@@ -95,11 +109,13 @@ pub struct MatchOutcomeDto {
 }
 
 #[derive(Serialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct RegisterPlayerRequest {
     pub name: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterPlayerResponse {
     pub player_id: String,
@@ -108,18 +124,21 @@ pub struct RegisterPlayerResponse {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct HouseBotDto {
     pub name: String,
     pub description: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchId {
     pub match_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchSettingsDto {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,6 +166,7 @@ impl MatchSettingsDto {
 }
 
 #[derive(Serialize, Debug, Clone, Default)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMatchRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +188,7 @@ impl CreateMatchRequest {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchPlayerDto {
     pub is_house_bot: bool,
@@ -177,6 +198,7 @@ pub struct MatchPlayerDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchSummaryDto {
     pub match_id: String,
@@ -198,6 +220,7 @@ pub struct MatchSummaryDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RulesDto {
     pub economy: EconomyRulesDto,
@@ -224,6 +247,7 @@ impl RulesDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct EconomyRulesDto {
     pub gather_per_tick: i32,
@@ -234,6 +258,7 @@ pub struct EconomyRulesDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BuildingStatsDto {
     #[serde(rename = "type")]
@@ -256,6 +281,7 @@ pub struct BuildingStatsDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UnitStatsDto {
     #[serde(rename = "type")]
@@ -273,6 +299,7 @@ pub struct UnitStatsDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeStatsDto {
     #[serde(rename = "type")]
@@ -284,6 +311,7 @@ pub struct UpgradeStatsDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MapDto {
     pub width: i32,
@@ -307,6 +335,7 @@ impl MapDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GameStateDto {
     pub you: SelfDto,
@@ -363,6 +392,7 @@ impl GameStateDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SelfDto {
     pub player_id: String,
@@ -380,6 +410,7 @@ pub struct SelfDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UnitDto {
     pub id: i32,
@@ -397,6 +428,7 @@ pub struct UnitDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BuildingDto {
     pub id: i32,
@@ -416,6 +448,7 @@ pub struct BuildingDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RememberedBuildingDto {
     pub id: i32,
@@ -431,6 +464,7 @@ pub struct RememberedBuildingDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ProductionDto {
     pub unit_type: UnitType,
@@ -438,6 +472,7 @@ pub struct ProductionDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResearchDto {
     pub building_id: i32,
@@ -446,6 +481,7 @@ pub struct ResearchDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceDepositDto {
     pub id: i32,
@@ -455,6 +491,7 @@ pub struct ResourceDepositDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GameEventDto {
     pub tick: i32,
@@ -466,6 +503,7 @@ pub struct GameEventDto {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerSummaryDto {
     pub player_id: String,
@@ -490,6 +528,7 @@ pub struct PlayerSummaryDto {
 /// Units are selected with `units` ("5-10", "1-7,12", "all", "idle") and/or
 /// `unit_ids`, optionally narrowed by `unit_type`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRequest {
     #[serde(rename = "type")]
@@ -615,11 +654,13 @@ impl CommandRequest {
 }
 
 #[derive(Serialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct SubmitCommandsRequest {
     pub commands: Vec<CommandRequest>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitCommandsResponse {
     pub accepted: i32,
@@ -631,6 +672,7 @@ pub struct SubmitCommandsResponse {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CommandResult {
     pub index: i32,
@@ -640,6 +682,7 @@ pub struct CommandResult {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct CommandError {
     pub code: String,
     pub message: String,
@@ -647,6 +690,7 @@ pub struct CommandError {
 
 /// Final outcome of a finished match (`GET /api/v1/matches/{id}/result`).
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MatchResultDto {
     pub match_id: String,
@@ -657,6 +701,7 @@ pub struct MatchResultDto {
 
 /// One player's final score and unit/building counts.
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerResultDto {
     pub player_id: String,

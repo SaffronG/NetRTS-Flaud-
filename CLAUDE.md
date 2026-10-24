@@ -3,13 +3,15 @@
 NetRTS(Flaud) is a Rust bot for a simplified StarCraft (NetRTS), built for the Snow College coding competition 2026–2027. See `README.md` for running the bots and their flags.
 
 - `src/bots/` — the bots: `flaud.rs` (fly-brain driven), `rustala.rs` (algorithm based), `test_bot.rs` (port of the example bot)
-- `src/logic/` — the API client and models (`api.rs`, `models.rs`) and the fly brain: `neurons.rs` (LIF neuron), `sensory.rs` (sense encoding), `connectome.rs` (motor layer and action choice)
+- `src/data/` — the API models (`models.rs`) and `schema_drift.rs`, a test that diffs them against the server's OpenAPI spec (`fixtures/openapi.json`)
+- `src/logic/` — the API client (`api.rs`) and the fly brain: `neurons.rs` (LIF neuron), `sensory.rs` (sense encoding), `connectome.rs` (motor layer and action choice)
 - `src/ui/` — terminal menu, startup and the match visualizer
 
 ```shell
 cargo build
 cargo test            # CI (.github/workflows/rust.yml) runs build + test on main and PRs
 cargo run -- --name Flaud
+cargo test schema_drift -- --ignored --nocapture  # diff the models against the live server spec (UPDATE_SPEC=1 also saves it)
 ```
 
 ## Working mode: guided learning
