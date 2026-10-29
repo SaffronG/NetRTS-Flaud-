@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::logic::connectome::{FlyBrainConnectome, MotorAction};
 use crate::data::models::*;
+use crate::logic::memory::{BrainStore, Snapshot};
 use crate::logic::sensory::{PREY, SENSES, SUGAR, THREAT, WEALTH};
 use crate::logic::shared::{
     Bot, HeatMaps, Loc, R, dist, encode_prey, encode_sugar, encode_threat, enemy_base, find_site,
@@ -13,10 +15,10 @@ pub const DECAY: f32 = 0.8; // Determines that the minimum current possible to m
 pub const THRESHOLD: f32 = 1.0; // If (v > THRESHOLD) fire every tick
 
 // Production
-const TARGET_WORKERS: usize = 20;
-const TARGET_SCOUTS: usize = 15;
+const TARGET_WORKERS: usize = 15;
+const TARGET_SCOUTS: usize = 5;
 /// Units a building may have queued before we stop adding more
-const QUEUE_LIMIT: usize = 5;
+const QUEUE_LIMIT: usize = 3;
 /// Workers needed before we stop training them to save for the first Barracks
 const BARRACKS_AT_WORKERS: usize = 4;
 /// Same as Build in `urgency`. Training is added after the unit commands and
@@ -25,12 +27,21 @@ const SPAWN_URGENCY: u8 = 3;
 /// Non-worker units ordered before training pauses until a new building completes
 const UNITS_PER_BUILDING: usize = 5;
 
+// Learning
+/// Reward a scout group earns for each tick it loses nobody
+const SCOUT_ALIVE: f32 = 0.1;
+/// Where learned weights are kept between matches, relative to the working
+/// directory. None in tests, so they never read or overwrite a real save.
+const BRAINS_FILE: Option<&str> = if cfg!(test) { None } else { Some("brains.json") };
+
 struct BrainGroup {
     ids: Vec<i32>,
     brain: FlyBrainConnectome,
     /// Deposit ids this worker group mines exclusively until they run dry.
     /// Empty when it has no claim (and always for armies and scouts).
     mine: Vec<i32>,
+    /// The group as of last tick, compared with now to work out its reward
+    last: Snapshot,
 }
 
 // Weight rows are [threat, sugar, prey, wealth]. A -1.0 or stronger threat
@@ -56,8 +67,8 @@ fn worker_brain() -> FlyBrainConnectome {
 fn army_brain() -> FlyBrainConnectome {
     FlyBrainConnectome::new(
         vec![
-            [1.2, 0.0, 0.8, 0.0],  // Attack: on the first vision spike
-            [-1.0, 0.0, 0.9, 0.0], // Explore: hunt prey, but not while fighting
+            [0.9, 0.0, 0.8, 0.0],  // Attack: on the first vision spike
+            [-0.8, 0.0, 0.9, 0.0], // Explore: hunt prey, but not while fighting
             [0.4, 0.2, 0.3, 0.0], // Retreat: run away when threat is too high
         ],
         DECAY,
@@ -87,6 +98,31 @@ enum Role {
     Scout,
 }
 
+impl Role {
+    /// Name of the role's weights in `BrainStore`
+    fn key(self) -> &'static str {
+        match self {
+            Role::Worker => "worker",
+            Role::Army => "army",
+            Role::Scout => "scout",
+        }
+    }
+
+    /// The role's hand-tuned brain, with weights learned in earlier matches if any were saved
+    fn brain(self, store: &BrainStore) -> FlyBrainConnectome {
+        let mut b = match self {
+            Role::Worker => worker_brain(),
+            Role::Army => army_brain(),
+            Role::Scout => scout_brain(),
+        };
+        if let Some(saved) = store.weights.get(self.key()) {
+            // A save from before a motor was added or removed is ignored
+            b.load_weights(saved);
+        }
+        b
+    }
+}
+
 pub struct Flaud {
     regiments: Vec<BrainGroup>,
     workers: Vec<BrainGroup>,
@@ -100,6 +136,13 @@ pub struct Flaud {
     units_since_build: usize,
     /// Ids of completed buildings seen so far; a new one resets `units_since_build`
     built: HashSet<i32>,
+    /// Where each visible enemy unit was last tick, to place this tick's kills
+    enemies_last: HashMap<i32, Loc>,
+    /// Newest event tick already rewarded. `events` is a rolling window, so
+    /// without this a kill would be rewarded again on every tick it stays listed.
+    events_through: i32,
+    /// Weights learned in earlier matches; new groups start from these
+    brains: BrainStore,
 }
 
 impl Bot for Flaud {
@@ -107,6 +150,7 @@ impl Bot for Flaud {
         self.update_groups(s);
         self.assign_mines(s);
         self.note_new_buildings(s);
+        self.reward_groups(s);
 
         let (threat, sugar, prey) = std::thread::scope(|sc| {
             let threat = sc.spawn(|| encode_threat(s));
@@ -180,6 +224,20 @@ impl Bot for Flaud {
             heat: None,
             units_since_build: 0,
             built: HashSet::new(),
+            enemies_last: HashMap::new(),
+            events_through: -1,
+            brains: BRAINS_FILE.map_or_else(BrainStore::default, |p| BrainStore::load(Path::new(p))),
+        }
+    }
+
+    fn finish(&mut self, s: &GameStateDto) -> std::io::Result<()> {
+        // The final tick's losses and kills still count
+        self.update_groups(s);
+        self.reward_groups(s);
+        self.remember();
+        match BRAINS_FILE {
+            Some(p) => self.brains.save(Path::new(p)),
+            None => Ok(()),
         }
     }
 }
@@ -204,15 +262,15 @@ impl Flaud {
             .copied()
             .collect();
 
+        let store = &self.brains;
         for u in s.my_units().filter(|u| !assigned.contains(&u.id)) {
-            match u.kind {
-                UnitType::Worker => Self::join(&mut self.workers, u.id, worker_brain),
-                UnitType::Scout => Self::join(&mut self.regiments, u.id, scout_brain),
-                UnitType::Soldier | UnitType::Archer => {
-                    Self::join(&mut self.armies, u.id, army_brain)
-                }
-                _ => (),
-            }
+            let (groups, role) = match u.kind {
+                UnitType::Worker => (&mut self.workers, Role::Worker),
+                UnitType::Scout => (&mut self.regiments, Role::Scout),
+                UnitType::Soldier | UnitType::Archer => (&mut self.armies, Role::Army),
+                _ => continue,
+            };
+            Self::join(groups, u.id, || role.brain(store));
         }
     }
 
@@ -251,6 +309,51 @@ impl Flaud {
         }
     }
 
+    /// Stores each role's weights, averaged over its groups, for the next match.
+    /// A role with no groups left keeps what was stored before.
+    fn remember(&mut self) {
+        for (role, groups) in [
+            (Role::Worker, &self.workers),
+            (Role::Army, &self.armies),
+            (Role::Scout, &self.regiments),
+        ] {
+            if let Some(avg) = average_weights(groups) {
+                self.brains.weights.insert(role.key().into(), avg);
+            }
+        }
+        self.brains.matches += 1;
+    }
+
+    /// Rewards each group's brain for what changed since last tick, then
+    /// snapshots the group for next tick. Runs after `update_groups`: `ids` are
+    /// already pruned, but the snapshot still lists the units lost since.
+    fn reward_groups(&mut self, s: &GameStateDto) {
+        let mine: HashMap<i32, &UnitDto> = s.my_units().map(|u| (u.id, u)).collect();
+        let kills: Vec<Loc> = s
+            .events
+            .iter()
+            .filter(|e| e.tick > self.events_through && e.kind == "UnitKilled")
+            .filter_map(|e| self.enemies_last.get(&e.entity_id?).copied())
+            .collect();
+
+        for (role, groups) in [
+            (Role::Worker, &mut self.workers),
+            (Role::Army, &mut self.armies),
+            (Role::Scout, &mut self.regiments),
+        ] {
+            for g in groups.iter_mut() {
+                let r = reward(role, g, &kills, &mine, s);
+                g.brain.learn(r);
+                g.last = Snapshot::take(&g.ids, &mine);
+            }
+        }
+
+        if let Some(newest) = s.events.iter().map(|e| e.tick).max() {
+            self.events_through = self.events_through.max(newest);
+        }
+        self.enemies_last = s.enemy_units().map(|u| (u.id, (u.x, u.y))).collect();
+    }
+
     /// Resets `units_since_build` when a building we haven't seen completed appears.
     /// Tracks ids, not a count, so one lost and one finished on the same tick still resets.
     fn note_new_buildings(&mut self, s: &GameStateDto) {
@@ -281,7 +384,7 @@ impl Flaud {
         groups.retain(|g| !g.ids.is_empty());
     }
 
-    fn join(groups: &mut Vec<BrainGroup>, id: i32, make: fn() -> FlyBrainConnectome) {
+    fn join(groups: &mut Vec<BrainGroup>, id: i32, make: impl FnOnce() -> FlyBrainConnectome) {
         match groups
             .iter_mut()
             .filter(|g| g.ids.len() < GROUP_SIZE)
@@ -292,6 +395,7 @@ impl Flaud {
                 ids: vec![id],
                 brain: make(),
                 mine: vec![],
+                last: Snapshot::default(),
             }),
         }
     }
@@ -470,6 +574,44 @@ fn senses(maps: &HeatMaps, at: Loc, wealth: f32) -> [f32; SENSES] {
     out[PREY] = sample(&maps.prey, w, h, x, y);
     out[WEALTH] = wealth;
     out
+}
+
+/// Mean of each weight across `groups`, which must all share one role (and so
+/// one shape). Every group's weights are inside the same sign bounds, so their
+/// mean is too. None for no groups.
+fn average_weights(groups: &[BrainGroup]) -> Option<Vec<[f32; SENSES]>> {
+    let n = groups.len() as f32;
+    let mut sum = vec![[0.0; SENSES]; groups.first()?.brain.weights.len()];
+    for g in groups {
+        for (total, row) in sum.iter_mut().zip(&g.brain.weights) {
+            for s in 0..SENSES {
+                total[s] += row[s];
+            }
+        }
+    }
+    Some(sum.into_iter().map(|row| row.map(|w| w / n)).collect())
+}
+
+/// One group's reward this tick: +1 per load a worker delivered, +1 per enemy
+/// killed within `R` of an army, `SCOUT_ALIVE` for a scout group that lost
+/// nobody, and -1 per unit lost in every role.
+fn reward(
+    role: Role,
+    g: &BrainGroup,
+    kills: &[Loc],
+    mine: &HashMap<i32, &UnitDto>,
+    s: &GameStateDto,
+) -> f32 {
+    let lost = g.last.lost(mine) as f32;
+    let gain = match role {
+        Role::Worker => g.last.delivered(mine) as f32,
+        Role::Army => centroid(&g.ids, s).map_or(0.0, |(x, y)| {
+            kills.iter().filter(|(kx, ky)| dist(x, y, *kx, *ky) <= R).count() as f32
+        }),
+        Role::Scout if lost == 0.0 => SCOUT_ALIVE,
+        Role::Scout => 0.0,
+    };
+    gain - lost
 }
 
 fn urgency(a: MotorAction) -> u8 {
@@ -898,6 +1040,7 @@ mod flaud_tests {
             ids: ids.to_vec(),
             brain: worker_brain(),
             mine: vec![],
+            last: Snapshot::default(),
         }
     }
 
@@ -1736,5 +1879,165 @@ mod flaud_tests {
     fn no_units_sends_no_commands() {
         let mut bot = Flaud::new(fixtures::map(), fixtures::rules());
         assert!(bot.decide(&fixtures::state()).is_empty());
+    }
+
+    // --- learning ---
+
+    fn mine_by_id(s: &GameStateDto) -> HashMap<i32, &UnitDto> {
+        s.my_units().map(|u| (u.id, u)).collect()
+    }
+
+    /// A group of `ids` snapshotted in `before`, rewarded as `role` in `after`.
+    fn reward_between(role: Role, ids: &[i32], before: &GameStateDto, after: &GameStateDto, kills: &[Loc]) -> f32 {
+        let mut g = group(ids);
+        g.last = Snapshot::take(ids, &mine_by_id(before));
+        g.ids.retain(|id| after.my_units().any(|u| u.id == *id)); // as update_groups would
+        reward(role, &g, kills, &mine_by_id(after), after)
+    }
+
+    fn carrying(id: i32, ore: i32) -> UnitDto {
+        let mut u = placed(id, UnitType::Worker, fixtures::state().you.slot, 2, 2);
+        u.carrying = ore;
+        u
+    }
+
+    #[test]
+    fn worker_is_rewarded_per_delivery() {
+        let before = with_units(vec![carrying(1, 5), carrying(2, 5), carrying(3, 0)]);
+        let after = with_units(vec![carrying(1, 0), carrying(2, 5), carrying(3, 0)]);
+        assert_eq!(reward_between(Role::Worker, &[1, 2, 3], &before, &after, &[]), 1.0);
+    }
+
+    #[test]
+    fn a_worker_dying_with_ore_is_a_loss_not_a_delivery() {
+        let before = with_units(vec![carrying(1, 5), carrying(2, 0)]);
+        let after = with_units(vec![carrying(2, 0)]);
+        assert_eq!(reward_between(Role::Worker, &[1, 2], &before, &after, &[]), -1.0);
+    }
+
+    #[test]
+    fn every_role_is_punished_per_unit_lost() {
+        let me = fixtures::state().you.slot;
+        let before = with_units(vec![soldier(1, me, 2, 2), soldier(2, me, 2, 2), soldier(3, me, 2, 2)]);
+        let after = with_units(vec![soldier(3, me, 2, 2)]);
+        for role in [Role::Worker, Role::Army, Role::Scout] {
+            assert_eq!(reward_between(role, &[1, 2, 3], &before, &after, &[]), -2.0, "{role:?}");
+        }
+    }
+
+    #[test]
+    fn army_is_rewarded_only_for_kills_nearby() {
+        let me = fixtures::state().you.slot;
+        let s = with_units(vec![soldier(1, me, 2, 2)]);
+        let near = (2 + R, 2);
+        let far = (2 + R + 1, 2);
+        assert_eq!(reward_between(Role::Army, &[1], &s, &s, &[near, far, near]), 2.0);
+    }
+
+    #[test]
+    fn scouts_are_rewarded_for_staying_alive() {
+        let me = fixtures::state().you.slot;
+        let s = with_units(vec![placed(1, UnitType::Scout, me, 2, 2)]);
+        assert_eq!(reward_between(Role::Scout, &[1], &s, &s, &[]), SCOUT_ALIVE);
+    }
+
+    fn killed(tick: i32, id: i32) -> GameEventDto {
+        GameEventDto {
+            tick,
+            kind: "UnitKilled".into(),
+            message: String::new(),
+            command_id: None,
+            entity_id: Some(id),
+            owner: None,
+        }
+    }
+
+    #[test]
+    fn a_kill_is_rewarded_once_while_it_stays_in_events() {
+        let me = fixtures::state().you.slot;
+        let mut b = bot();
+        let mut s = with_units(vec![soldier(1, me, 2, 2), soldier(9, me + 1, 3, 2)]);
+        s.tick = 1;
+        b.update_groups(&s);
+        b.reward_groups(&s);
+
+        // The enemy is gone and the kill is listed for two ticks
+        s.units = vec![soldier(1, me, 2, 2)];
+        s.events = vec![killed(2, 9)];
+        let r_bar = |b: &Flaud| b.armies[0].brain.plasticity.r_bar;
+        let mut seen = vec![];
+        for tick in [2, 3] {
+            s.tick = tick;
+            b.update_groups(&s);
+            b.reward_groups(&s);
+            seen.push(r_bar(&b));
+        }
+        assert!(seen[0] > 0.0, "the kill was not rewarded");
+        assert!(seen[1] < seen[0], "the kill was rewarded twice: {seen:?}");
+    }
+
+    #[test]
+    fn worker_rewarded_for_gathering_near_sugar_gathers_sooner() {
+        // Strong enough that sugar spikes every tick, so only the weight sets the timing
+        const NEAR_SUGAR: [f32; 4] = [0.0, 0.5, 0.0, 0.0];
+        let mut trained = worker_brain();
+        for _ in 0..300 {
+            let a = trained.tick(NEAR_SUGAR);
+            trained.learn(if a == Gather { 1.0 } else { 0.0 });
+        }
+        // Fresh voltages and traces, learned weights
+        let mut after = worker_brain();
+        after.weights = trained.weights.clone();
+        let fresh = run(worker_brain, NEAR_SUGAR);
+        let [t, s, p, w] = NEAR_SUGAR;
+        let learned: Vec<_> = (0..TICKS).map(|_| feel(&mut after, t, s, p, w)).collect();
+        let (f, l) = (first(&fresh, Gather).unwrap(), first(&learned, Gather).unwrap());
+        assert!(l < f, "fresh gathers at tick {f}, trained at {l}; weights {:?}", trained.weights);
+    }
+
+    // --- saved brains ---
+
+    #[test]
+    fn remember_stores_each_roles_average_weights() {
+        let mut b = bot();
+        let (mut g1, mut g2) = (group(&[1]), group(&[2]));
+        g1.brain.weights[1][SUGAR] = 0.4;
+        g2.brain.weights[1][SUGAR] = 0.8;
+        b.workers = vec![g1, g2];
+        b.remember();
+        let saved = &b.brains.weights["worker"];
+        assert!((saved[1][SUGAR] - 0.6).abs() < 1e-6, "{saved:?}");
+        assert_eq!(saved[0], worker_brain().weights[0], "an unchanged row stays the same");
+        assert_eq!(b.brains.matches, 1);
+    }
+
+    #[test]
+    fn a_role_with_no_groups_left_keeps_its_saved_weights() {
+        let mut b = bot();
+        let old = vec![[0.1; SENSES]; 2];
+        b.brains.weights.insert("army".into(), old.clone());
+        b.remember();
+        assert_eq!(b.brains.weights["army"], old);
+        assert!(!b.brains.weights.contains_key("scout"), "nothing to remember yet");
+    }
+
+    #[test]
+    fn new_groups_start_from_the_saved_weights() {
+        let mut b = bot();
+        let mut learned = worker_brain().weights;
+        learned[1][SUGAR] = 0.9;
+        b.brains.weights.insert("worker".into(), learned.clone());
+        let me = fixtures::state().you.slot;
+        b.update_groups(&with_units(vec![placed(1, UnitType::Worker, me, 2, 2)]));
+        assert_eq!(b.workers[0].brain.weights, learned);
+    }
+
+    #[test]
+    fn a_save_with_the_wrong_shape_is_ignored() {
+        let mut b = bot();
+        b.brains.weights.insert("scout".into(), vec![[0.5; SENSES]; 7]);
+        let me = fixtures::state().you.slot;
+        b.update_groups(&with_units(vec![placed(1, UnitType::Scout, me, 2, 2)]));
+        assert_eq!(b.regiments[0].brain.weights, scout_brain().weights);
     }
 }

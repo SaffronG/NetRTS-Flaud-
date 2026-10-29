@@ -118,3 +118,13 @@ $$m^* = \arg\max_{m \,:\, V_m \ge \theta} V_m \quad (\text{a tie goes to the low
 $$V_{m^*} \leftarrow V_{rest}, \qquad V_m \leftarrow V_m - \iota \;\; \forall\, m \ne m^*$$
 
 $\iota$ is `INHIBITION` (0.05). If no motor reaches $\theta$, the action is `HoldPosition`. Losers over threshold keep their charge, so they win the next tick.
+
+**Learning: reward-modulated STDP** (`src/logic/learning.rs`, stepped at the end of `tick` and applied in `FlyBrainConnectome::learn`). The traces are updated in this order every tick, including Hold ticks:
+
+$$x_s \leftarrow \lambda_x x_s + \sigma_s, \qquad e_{m,s} \leftarrow \lambda_e e_{m,s} + x_s[m = m^*] - y_m \sigma_s, \qquad y_m \leftarrow \lambda_x y_m + [m = m^*]$$
+
+$\lambda_x$ is `TRACE_DECAY` (0.9) and $\lambda_e$ is `ELIG_DECAY` (0.95). $e$ uses the post trace from *before* this tick. Then, once per tick, with $r$ from `reward` in `flaud.rs`:
+
+$$d = r - \bar r, \quad \bar r \leftarrow \bar r + \alpha d, \quad W_{m,s} \leftarrow \operatorname{sgn}(W^0_{m,s})\,\operatorname{clip}\big(\operatorname{sgn}(W^0_{m,s})(W_{m,s} + \eta\, d\, e_{m,s}),\,0,\,W_{max}\big)$$
+
+$\eta$ is `ETA` (0.002), $\alpha$ is `REWARD_WEIGHT` (0.05) and $W_{max}$ is `W_MAX` (2.0). $\operatorname{sgn}(0) = 0$, so weights that start at 0 stay at 0 (Dale's law).

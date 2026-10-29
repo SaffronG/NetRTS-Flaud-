@@ -443,6 +443,9 @@ impl MenuContext {
             screen.stats.draw.record(started.elapsed());
         }
 
+        if let Err(e) = bot.finish(&state) {
+            screen.log(&format!("Couldn't save what the bot learned: {e}"), true);
+        }
         Self::line("\r\nMatch completed.", false)?;
         self.show_result(id).await
     }

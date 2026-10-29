@@ -1,5 +1,162 @@
 # Changelog
 
+## 2026-10-29 11:45:25 MDT — R-STDP step 8: learned weights persist between matches
+
+### Added
+
+- `src/logic/memory.rs`: `BrainStore`, the learned weights per role name (a `BTreeMap`, so the file keeps a stable order and diffs cleanly) plus a `matches` counter. `load` returns an empty store if the file is missing or can't be parsed, so the bot falls back to its hand-tuned brains instead of failing to start. `save` writes `brains.json.tmp` and renames it over `brains.json`, so a crash mid-write can't leave a half-written file.
+- `src/logic/connectome.rs:88`: `FlyBrainConnectome::load_weights(saved)` replaces the weights and passes each one through `bound` with the brain's *own* starting signs. If a sign in `worker_brain` etc. changes after a save, the code wins. If the number of motors differs, it returns `false` and changes nothing.
+- `src/logic/shared.rs:92`: `Bot::finish(&mut self, state)`, called once with the final state. Its default does nothing, so `TestBot` and `RustalaDaora` are unchanged.
+- `src/ui/console.rs:446`: `play_match` calls `bot.finish` after the loop. A failed save is logged in red and the result screen still shows.
+- `src/bots/flaud.rs`: `Flaud::finish` runs `update_groups` and `reward_groups` on the final state, so the last tick's losses and kills still count. Then `remember` and a save to `BRAINS_FILE` (`brains.json` in the working directory, `None` under `cfg!(test)` so tests never read or overwrite a real save).
+- `src/bots/flaud.rs`: `remember` stores each role's `average_weights` across its groups and adds 1 to `matches`. A role with no groups left keeps its earlier save.
+- `src/bots/flaud.rs`: `Role::key` and `Role::brain(store)` build a role's hand-tuned brain with its saved weights loaded on top. `Flaud::new` loads the store.
+
+### Changed
+
+- `src/bots/flaud.rs`: `join` takes `impl FnOnce() -> FlyBrainConnectome` instead of `fn() -> FlyBrainConnectome`, so the closure can borrow `self.brains`. That works alongside `&mut self.workers` because the two are separate fields. `update_groups` picks `(groups, role)` in its `match` and calls `join` once, instead of once per arm.
+- `src/bots/flaud.rs`: new groups now start from the weights saved by earlier matches instead of always from the hand-tuned values.
+
+### Math
+
+**Merging a role's groups** (`src/bots/flaud.rs:582`, `average_weights`)
+
+$$\overline W_{m,s} = \frac{1}{G}\sum_{g=1}^{G} W^{(g)}_{m,s}$$
+
+- $G$: the number of groups of that role alive at the end of the match (`groups.len()`)
+- $W^{(g)}_{m,s}$: group $g$'s weight from sense $s$ to motor $m$
+
+Each group learned from its own experience during the match, and the saved brain is the mean of all of them. A group that had an unusual match pulls the result only $1/G$ of the way toward itself. Every $W^{(g)}$ is inside the same sign bounds, $[0, W_{max}]$ or $[-W_{max}, 0]$, and an average of numbers in an interval stays in that interval, so the merged weights obey Dale's law without clipping again.
+
+### Tests
+
+- `src/logic/memory.rs` (`memory_tests`): save then load gives the same store; a missing or corrupt file loads as empty. These use files in the system temp dir.
+- `src/logic/connectome.rs`: `load_weights` replaces weights, clips flipped signs to 0 and keeps missing synapses at 0, and rejects a different number of motors.
+- `src/bots/flaud.rs` (`--- saved brains ---`): `remember` averages two groups (0.4 and 0.8 → 0.6) and counts the match; a role with no groups keeps its old save; a new worker group starts from saved weights; a save with the wrong shape is ignored.
+
+## 2026-10-29 11:38:02 MDT — R-STDP step 7: learning tests
+
+### Tests
+
+- `src/logic/learning.rs` (`learning_tests`):
+  - A sense and a motor spiking on the same tick give eligibility +1, not 0. This guards the trace update order.
+  - A sense spiking *after* a win lowers eligibility.
+  - `surprise` measures against the old baseline.
+  - A steady reward stops being a surprise after 500 ticks.
+  - `bound` keeps signs, caps at `W_MAX` and keeps a missing synapse at 0.
+- `src/logic/connectome.rs` (`connectome_tests`, `--- learning ---`), using `threat_fired()`, a brain where one threat tick fires Retreat:
+  - Eligibility is positive only at `[winner][THREAT]` and 0 everywhere else, which catches a swapped row and column.
+  - `learn(+1)` raises that weight and `learn(-1)` lowers it, and the losing motor's weights don't move.
+  - With `r_bar == r`, nothing changes.
+  - 200 ticks of `learn(±1000)` never flip a sign, exceed `W_MAX` or grow a 0 weight.
+  - After 100 Hold ticks, all eligibility is below 0.01. This also checks that `tick` still steps the traces before its early return.
+- `src/bots/flaud.rs` (`flaud_tests`, `--- learning ---`):
+  - Rewards per role: deliveries, a worker dying with ore counted as a loss and not a delivery, −1 per loss in every role, army kills counted only within `R`, and the scout survival bonus.
+  - `a_kill_is_rewarded_once_while_it_stays_in_events` covers the rolling `events` window.
+  - `worker_rewarded_for_gathering_near_sugar_gathers_sooner`: 300 ticks of +1 per Gather at sugar 0.5 cut the first Gather from tick 1 to tick 0. The sugar heat is 0.5 rather than 0.1 because at 0.1 the sugar neuron first spikes on tick 2, so no sugar weight could move Gather earlier than that.
+
+## 2026-10-29 11:38:02 MDT — R-STDP steps 5–6: Dale's-law bounds and per-group reward
+
+### Added
+
+- `src/logic/learning.rs`: `bound(w, sign)` and `W_MAX` = 2.0. `Plasticity::new` now takes `&weights` instead of a motor count, and saves each weight's starting sign in `sign` (1, −1, or 0 for a weight that starts at 0). It uses its own check rather than `f32::signum`, which returns 1.0 for 0.0.
+- `src/logic/connectome.rs`: `learn` passes every updated weight through `bound`.
+- `src/logic/memory.rs`: `Snapshot`, each group member's `carrying` as of last tick, keyed by unit id. `take` records it, `lost` counts members that are gone, and `delivered` counts members that carried ore and are now alive and empty.
+- `src/bots/flaud.rs`: `BrainGroup.last: Snapshot`. `Flaud::reward_groups` runs in `decide` after `update_groups`. It works out each group's reward with `reward`, calls `brain.learn(r)` and then takes a new snapshot. It keeps `enemies_last` (enemy positions from last tick, because a killed enemy is gone from this tick's state) and `events_through` (the newest event tick already counted, because `events` is a rolling "recent events" window that would otherwise reward one kill on every tick it stays listed).
+- `src/bots/flaud.rs`: `reward(role, …)`: workers get +1 per delivery, armies +1 per `UnitKilled` whose enemy was last seen within `R` of the group's centre, and scout groups `SCOUT_ALIVE` (0.1) for a tick with no losses. Every role gets −1 per unit lost.
+
+### Changed
+
+- `src/bots/flaud.rs`: the brains now change their weights during a match. Before this, they stayed exactly as hand-tuned.
+
+### Math
+
+**Dale's-law bound** (`src/logic/learning.rs:33`, `bound`)
+
+$$W \leftarrow \operatorname{sgn}(W_0)\cdot \operatorname{clip}\big(\operatorname{sgn}(W_0)\,W,\; 0,\; W_{max}\big)$$
+
+- $W_0$: the hand-tuned starting weight; $\operatorname{sgn}(W_0) \in \{-1, 0, 1\}$ (`sign[m][s]`)
+- $W_{max}$: `W_MAX` = 2.0, above every tuned weight (the largest is the scout's −1.5)
+
+Multiplying by the sign flips an inhibitory weight so it looks excitatory. The clip then keeps it between 0 and $W_{max}$, and multiplying by the sign again flips it back. So an excitatory weight stays in $[0, 2]$ and an inhibitory one in $[-2, 0]$. A weight that starts at 0 has sign 0, so the result is always 0. In game, "workers never gather under fire" (−1.0) can weaken but never become "workers are drawn to fire".
+
+**Reward per group** (`src/bots/flaud.rs:524`, `reward`)
+
+$$r = \text{gain}_{role} - n_{lost}$$
+
+| Role | $\text{gain}$ |
+| --- | --- |
+| Worker | loads delivered this tick |
+| Army | `UnitKilled` events whose enemy was last within $R$ (9) tiles of the group's centre |
+| Scout | `SCOUT_ALIVE` = 0.1 if $n_{lost} = 0$, else 0 |
+
+$n_{lost}$ is the number of group members alive last tick and gone now. A kill near two armies rewards both. `UnitKilled`'s `entity_id` is assumed to be the enemy we killed, because `events` only lists our own events. Check this in a real match.
+
+## 2026-10-29 11:32:12 MDT — R-STDP step 4: `learn` applies reward to the weights
+
+## 2026-10-29 11:32:12 MDT — R-STDP step 4: `learn` applies reward to the weights
+
+### Added
+
+- `src/logic/connectome.rs`: `FlyBrainConnectome::learn(reward)`. It gets the surprise from `Plasticity::surprise`, then moves every weight by `ETA * surprise * eligibility`. It's a method on the brain, not on `Plasticity`, because it needs `&mut self.weights` and reads `self.plasticity.elig` at the same time. Those are two separate fields, so the borrow checker allows it. Nothing calls it yet (that's step 6), and the weights aren't bounded yet (step 5).
+- `src/logic/learning.rs`: `Plasticity::surprise(reward)` returns $r - \bar r$ and then moves $\bar r$ toward $r$. `ETA` and `REWARD_WEIGHT` are now `pub`, so `connectome.rs` can use them.
+
+### Math
+
+**Weight update** (`src/logic/connectome.rs:89`, `learn`)
+
+$$W_{m,s} \leftarrow W_{m,s} + \eta\,(r - \bar r)\,e_{m,s}$$
+
+- $W_{m,s}$: weight from sense $s$ to motor $m$ (`weights[m][s]`)
+- $\eta$: learning rate, `ETA` = 0.002
+- $r$: this tick's reward (the `reward` argument); $\bar r$: the reward the brain expected (`r_bar`)
+- $e_{m,s}$: eligibility, which says how much that synapse helped cause recent actions (`elig[m][s]`)
+
+A weight only changes if it's eligible *and* the reward was a surprise. A better-than-usual reward ($r > \bar r$) strengthens the synapses that just caused an action, and a worse-than-usual one weakens them. A negative eligibility flips the direction.
+
+**Reward baseline** (`src/logic/learning.rs:40`, `surprise`)
+
+$$d = r - \bar r, \qquad \bar r \leftarrow \bar r + \alpha\, d$$
+
+- $\alpha$: `REWARD_WEIGHT` = 0.05, so the baseline closes 5% of the gap each tick and takes about 20 ticks to catch up
+
+$d$ is taken *before* $\bar r$ moves, so each reward is compared with what was expected before it arrived. A group that always earns the same reward stops learning.
+
+**Tuning: `ETA` 0.5 → 0.002.** In a 200-tick measurement of the role brains under steady senses, $|e|$ peaked at about 6 and settled near 3. With $|d| \approx 1$ that moves a weight about 0.006–0.012 per tick, the plan's target of roughly 0.01. At 0.5 a single tick could move a weight by 3, enough to wipe out the hand tuning.
+
+## 2026-10-29 11:31:11 MDT — R-STDP steps 1–3: plasticity traces in the brain
+
+### Added
+
+- `src/logic/learning.rs`: rewritten as `Plasticity`, which holds a pre trace per sense (`pre`), a post trace per motor (`post`), an eligibility matrix shaped like `weights` (`elig`, rows are motors and columns are senses) and the reward baseline (`r_bar`). `Plasticity::new(motors)` starts everything at 0.
+  - Before: `elig` was `vec!([ELIG_DECAY; SENSES])`, a single row filled with 0.5, so a brain with 3 motors would index out of bounds and start with fake eligibility. Now it's `vec![[0.0; SENSES]; motors]`.
+  - Removed the old `Synapse`, `step` and `apply_reward`. They didn't compile (`Synapse` was gone) and `apply_reward`'s lazy `map` never ran. Its `clamp(0.0, 0.1)` would also have flattened every tuned weight.
+- `src/logic/learning.rs`: `Plasticity::step(spikes, winner)` updates the three traces in a fixed order: `pre` first, then `elig` using the *old* `post`, then `post`. If `post` were updated first, a sense and a motor spiking on the same tick would add +1 and subtract 1 and cancel out.
+- `src/logic/connectome.rs`: `FlyBrainConnectome` gets a `plasticity` field, built in `new` with one row per motor. `tick` calls `plasticity.step` *before* the `HoldPosition` early return, passing `None` when nothing fired, so the traces keep fading on quiet ticks. Only the winner counts as a post spike, because it's the only action that reached the game.
+
+### Math
+
+**Pre and post traces** (`src/logic/learning.rs:48`, `step`)
+
+$$x_s \leftarrow \lambda_x x_s + \sigma_s, \qquad y_m \leftarrow \lambda_x y_m + [m = m^*]$$
+
+- $x_s$: how recently sense $s$ spiked (`pre[s]`). $\sigma_s \in \{0, 1\}$ is this tick's spike (`spikes[s]`)
+- $y_m$: how recently motor $m$ won (`post[m]`). $[m = m^*]$ is 1 for the winner and 0 for everyone else (`won`)
+- $\lambda_x$: `TRACE_DECAY` = 0.9, used for both traces
+
+Each trace jumps by 1 on a spike, then fades by 10% a tick. After 10 quiet ticks a spike has faded to $0.9^{10} \approx 0.35$, and after 22 ticks to about 0.1. A sense spiking every tick settles at $1/(1 - 0.9) = 10$.
+
+**Eligibility** (`src/logic/learning.rs:48`, `step`)
+
+$$e_{m,s} \leftarrow \lambda_e\, e_{m,s} + x_s\,[m = m^*] - y_m\,\sigma_s$$
+
+- $e_{m,s}$: eligibility of the weight from sense $s$ to motor $m$ (`elig[m][s]`)
+- $\lambda_e$: `ELIG_DECAY` = 0.95, so a credit halves in about 14 ticks
+
+When motor $m$ wins, every sense that fired recently gets credit in proportion to how recently it fired (cause, then effect). When sense $s$ fires and motor $m$ won recently, that sense can't have caused the action, so the credit goes down (effect, then "cause").
+
+**Tuning:** `TRACE_DECAY` 0.5 → 0.9 and `ELIG_DECAY` 0.5 → 0.95. At 0.5, a credit falls to 3% within 5 ticks, before most game rewards (ore delivered, a kill) could arrive.
+
 ## 2026-10-24 01:17:05 MDT — CI schema drift step
 
 ### Added

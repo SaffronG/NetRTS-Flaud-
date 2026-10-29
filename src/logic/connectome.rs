@@ -1,4 +1,4 @@
-use crate::logic::{neurons::*, sensory::*};
+use crate::logic::{learning::{ETA, Plasticity, bound}, neurons::*, sensory::*};
 
 /// Voltage a motor spike takes from every other motor (lateral inhibition).
 /// Keep it small: a frequent winner drains the others on every spike, so a
@@ -13,6 +13,8 @@ pub struct FlyBrainConnectome {
     // Map bias and actions 1:1 to the motor_neurons
     pub bias: Vec<f32>,
     pub actions: Vec<MotorAction>,
+    /// Traces that let `learn` credit the weights behind recent actions
+    pub plasticity: Plasticity,
 }
 
 impl FlyBrainConnectome {
@@ -33,6 +35,7 @@ impl FlyBrainConnectome {
         Self {
             sensory: SensoryLayer::new(decay, threshold),
             motor_neurons: vec![LifNeuron::new(decay, threshold); weights.len()],
+            plasticity: Plasticity::new(&weights),
             weights,
             bias,
             actions,
@@ -59,7 +62,12 @@ impl FlyBrainConnectome {
             }
         }
 
-        let Some((w, _)) = winner else {
+        let winner = winner.map(|(w, _)| w);
+        // Before the early return, so the traces keep fading on ticks nothing fires.
+        // Only the winner counts as a post spike: it's the only action the game saw.
+        self.plasticity.step(&spikes, winner);
+
+        let Some(w) = winner else {
             return MotorAction::HoldPosition;
         };
         // Only the winner resets. A loser over threshold stays charged and wins
@@ -72,6 +80,33 @@ impl FlyBrainConnectome {
             }
         }
         self.actions[w]
+    }
+
+    /// Replaces the weights with saved ones, held to this brain's own starting
+    /// signs, so a sign changed in code since the save still wins. Returns false
+    /// and changes nothing if `saved` has a different number of motors.
+    pub fn load_weights(&mut self, saved: &[[f32; SENSES]]) -> bool {
+        if saved.len() != self.weights.len() {
+            return false;
+        }
+        for ((row, saved), sign) in self.weights.iter_mut().zip(saved).zip(&self.plasticity.sign) {
+            *row = std::array::from_fn(|s| bound(saved[s], sign[s]));
+        }
+        true
+    }
+
+    /// Nudges every weight by its eligibility times how much better (or worse)
+    /// `reward` was than usual, then holds it to its starting sign (`bound`). Lives here rather than on `Plasticity` because
+    /// it borrows `weights` and `plasticity` mutably at once, which the borrow
+    /// checker allows for two separate fields.
+    pub fn learn(&mut self, reward: f32) {
+        let d = self.plasticity.surprise(reward);
+        let p = &self.plasticity;
+        for ((row, elig), sign) in self.weights.iter_mut().zip(&p.elig).zip(&p.sign) {
+            for s in 0..SENSES {
+                row[s] = bound(row[s] + ETA * d * elig[s], sign[s]);
+            }
+        }
     }
 }
 
@@ -402,5 +437,116 @@ mod connectome_tests {
         ]);
         assert_eq!(b.tick([0.0, 0.0, 0.0, 0.0]), MotorAction::Attack);
         assert!(b.motor_neurons[1].voltage != 0.0, "never charged");
+    }
+
+    // --- learning ---
+
+    /// Retreat listens to threat only, Gather to sugar only. One tick of full
+    /// threat spikes the threat neuron and fires Retreat (motor 0).
+    fn threat_fired() -> FlyBrainConnectome {
+        let mut b = wired(&[
+            ([THRESHOLD, 0.0, 0.0, 0.0], 0.0, MotorAction::Retreat),
+            ([0.0, THRESHOLD, 0.0, 0.0], 0.0, MotorAction::Gather),
+        ]);
+        assert_eq!(b.tick([1.0, 0.0, 0.0, 0.0]), MotorAction::Retreat);
+        b
+    }
+
+    #[test]
+    fn eligibility_marks_only_the_winner_and_the_senses_that_spiked() {
+        // A swapped row/column lookup would mark [THREAT][0] or the wrong motor
+        let b = threat_fired();
+        for (m, row) in b.plasticity.elig.iter().enumerate() {
+            for (s, e) in row.iter().enumerate() {
+                if (m, s) == (0, THREAT) {
+                    assert!(*e > 0.0, "winner's threat synapse not eligible");
+                } else {
+                    assert_eq!(*e, 0.0, "elig[{m}][{s}]");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reward_strengthens_and_punishment_weakens_the_eligible_weight() {
+        let mut b = threat_fired();
+        b.learn(1.0);
+        assert!(b.weights[0][THREAT] > THRESHOLD);
+        let mut b = threat_fired();
+        b.learn(-1.0);
+        assert!(b.weights[0][THREAT] < THRESHOLD);
+    }
+
+    #[test]
+    fn learn_leaves_ineligible_weights_alone() {
+        let mut b = threat_fired();
+        b.learn(1.0);
+        assert_eq!(b.weights[1], [0.0, THRESHOLD, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn no_surprise_means_no_change() {
+        let mut b = threat_fired();
+        b.plasticity.r_bar = 0.5;
+        let before = b.weights.clone();
+        b.learn(0.5);
+        assert_eq!(b.weights, before);
+    }
+
+    #[test]
+    fn weights_stay_inside_their_bounds() {
+        let mut b = wired(&[
+            ([0.5, -0.5, 0.0, 0.0], 0.6, MotorAction::Attack),
+            ([-0.5, 0.5, 0.0, 0.0], 0.6, MotorAction::Gather),
+        ]);
+        let start = b.weights.clone();
+        for t in 0..200 {
+            b.tick([1.0, 1.0, 0.0, 0.0]);
+            b.learn(if t < 100 { 1000.0 } else { -1000.0 });
+            for (row, row0) in b.weights.iter().zip(&start) {
+                for (w, w0) in row.iter().zip(row0) {
+                    assert!(w * w0.signum() >= 0.0, "{w} flipped sign from {w0}");
+                    assert!(w.abs() <= crate::logic::learning::W_MAX);
+                    if *w0 == 0.0 {
+                        assert_eq!(*w, 0.0, "a missing synapse grew");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eligibility_fades_while_nothing_fires() {
+        // Nothing fires on these ticks, so this also checks `tick` still steps
+        // the traces before its HoldPosition early return
+        let mut b = threat_fired();
+        for _ in 0..100 {
+            assert_eq!(b.tick([0.0; SENSES]), MotorAction::HoldPosition);
+        }
+        let max = b.plasticity.elig.iter().flatten().fold(0.0f32, |a, e| a.max(e.abs()));
+        assert!(max < 0.01, "eligibility left: {max}");
+    }
+
+    #[test]
+    fn load_weights_replaces_the_weights() {
+        let mut b = brain(2);
+        let saved = vec![[0.7, -0.2, 0.0, 0.0], [0.3, -0.9, 0.0, 0.0]];
+        assert!(b.load_weights(&saved));
+        assert_eq!(b.weights, saved);
+    }
+
+    #[test]
+    fn load_weights_keeps_the_brains_own_signs() {
+        // brain() starts at [0.5, -0.5, 0, 0]: flipped signs clip to 0, a new synapse stays 0
+        let mut b = brain(1);
+        assert!(b.load_weights(&[[-0.7, 0.4, 0.9, 0.0]]));
+        assert_eq!(b.weights, vec![[0.0, 0.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn load_weights_rejects_a_different_shape() {
+        let mut b = brain(2);
+        assert!(!b.load_weights(&[[1.0; SENSES]]));
+        assert_eq!(b.weights, brain(2).weights);
     }
 }

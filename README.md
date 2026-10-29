@@ -132,6 +132,10 @@ Each sense neuron and motor neuron is a leaky integrate-and-fire neuron (`src/lo
 
 The weights are in `worker_brain`, `army_brain` and `scout_brain` in `src/bots/flaud.rs`.
 
+### Learning between matches
+
+During a match, each group's weights are nudged by reward (deliveries, kills, survival, minus units lost; see `src/logic/learning.rs`). They can't change sign or grow past 2.0. When a match ends, each role's weights are averaged over its groups and saved to `brains.json` in the working directory. The next match starts new groups from those weights. Delete `brains.json` to go back to the hand-tuned brains. With `docker compose` the file lives in the `flaud-data` volume. With a bare `docker run` it's lost when the container exits.
+
 ### Groups
 
 `update_groups` runs at the start of every tick. It removes dead units, drops empty groups, and puts new units in a group of their role with room (up to `GROUP_SIZE`, 5), or starts a new group with a fresh brain. Surviving groups keep their brain, so they keep their neuron voltages.

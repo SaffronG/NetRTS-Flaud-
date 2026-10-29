@@ -86,6 +86,12 @@ pub trait Bot {
     }
 
     fn new(m: MapDto, r: RulesDto) -> Self;
+
+    /// Called once with the final state after the match completes, e.g. to
+    /// save what was learned. Bots with nothing to keep do nothing.
+    fn finish(&mut self, _state: &GameStateDto) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Adds one source's falloff into `map`. Clamps the loop bounds once,
