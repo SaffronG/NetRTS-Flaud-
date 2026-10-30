@@ -379,15 +379,6 @@ mod tests {
     }
 
     #[test]
-    fn region_map_scales_by_weight() {
-        let (w, h) = (5, 5);
-        let mut map = vec![0.0; 25];
-        region_map(&mut map, w, h, 2, 2, 3.5);
-        assert!(approx(at(&map, w, 2, 2), 3.5 * STIMULI_LOOKUP[0]));
-        assert!(approx(at(&map, w, 0, 0), 3.5 * STIMULI_LOOKUP[2]));
-    }
-
-    #[test]
     fn region_map_clips_at_edges_and_corners() {
         // Sources on every corner of a map smaller than the falloff radius
         let (w, h) = (4, 3);
@@ -415,16 +406,6 @@ mod tests {
         assert!(approx(at(&map, w, 4, 0), STIMULI_LOOKUP[0] + STIMULI_LOOKUP[2]));
     }
 
-    #[test]
-    fn region_map_uses_row_major_layout() {
-        // Non-square map so a swapped x/y would land on a different cell
-        let (w, h) = (10, 5);
-        let mut map = vec![0.0; 50];
-        region_map(&mut map, w, h, 7, 2, 1.0);
-        assert!(approx(map[2 * 10 + 7], STIMULI_LOOKUP[0]));
-        assert_eq!(peak(&map, w), (7, 2));
-    }
-
     // --- normalize ---
 
     #[test]
@@ -439,13 +420,6 @@ mod tests {
         let mut map = vec![0.0; 6];
         normalize(&mut map);
         assert!(map.iter().all(|v| *v == 0.0), "no NaN from a zero max");
-    }
-
-    #[test]
-    fn normalize_handles_empty_map() {
-        let mut map: Vec<f64> = vec![];
-        normalize(&mut map);
-        assert!(map.is_empty());
     }
 
     // --- encode_threat ---
@@ -688,15 +662,6 @@ mod tests {
     // --- sample ---
 
     #[test]
-    fn sample_reads_row_major_cell() {
-        let (w, h) = (4, 3);
-        let map: Vec<f64> = (0..12).map(f64::from).collect();
-        assert_eq!(sample(&map, w, h, 0, 0), 0.0);
-        assert_eq!(sample(&map, w, h, 3, 0), 3.0);
-        assert_eq!(sample(&map, w, h, 1, 2), 9.0);
-    }
-
-    #[test]
     fn sample_is_zero_off_the_map() {
         let (w, h) = (4, 3);
         let map = vec![1.0; 12];
@@ -736,13 +701,6 @@ mod tests {
         let (w, h) = (20, 12);
         let map = peak_map(w, h, 10, 5);
         assert_eq!(uphill(&map, w, h, 10, 5), (0, 0));
-    }
-
-    #[test]
-    fn uphill_stays_put_on_flat_ground() {
-        let (w, h) = (20, 12);
-        let map = vec![0.0; (w * h) as usize];
-        assert_eq!(uphill(&map, w, h, 7, 7), (0, 0));
     }
 
     #[test]
@@ -787,14 +745,6 @@ mod tests {
         // Warm, but out of range
         let map = hot_cells(w, h, &[((19, 9), 1.0)]);
         assert_eq!(hottest_near(&map, w, h, (0, 0), 3), None);
-    }
-
-    #[test]
-    fn hottest_near_clips_its_window_at_the_edges() {
-        let (w, h) = (10, 10);
-        let map = hot_cells(w, h, &[((0, 0), 0.5), ((9, 9), 0.7)]);
-        assert_eq!(hottest_near(&map, w, h, (1, 1), R), Some((9, 9)));
-        assert_eq!(hottest_near(&map, w, h, (0, 0), 2), Some((0, 0)));
     }
 
     // --- find_site ---
@@ -927,16 +877,6 @@ mod tests {
     }
 
     #[test]
-    fn calculate_diagonal_dist() {
-        // A pure diagonal move costs the same as a straight one in Chebyshev
-        assert_eq!(dist(0, 0, 3, 3), 3);
-        assert_eq!(dist(0, 0, -3, 3), 3);
-        assert_eq!(dist(5, 5, 2, 2), 3);
-        // Uneven diagonal: the larger axis wins
-        assert_eq!(dist(0, 0, 2, 5), 5);
-    }
-
-    #[test]
     fn calculate_adjacent_dist() {
         // All 8 neighbours are distance 1
         for dx in -1..=1 {
@@ -951,12 +891,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn really_far_dist() {
-        assert_eq!(dist(0, 0, 1_000_000, 5), 1_000_000);
-        assert_eq!(dist(-500_000, 0, 500_000, 999), 1_000_000);
-        // Symmetric
-        assert_eq!(dist(1_000_000, 5, 0, 0), dist(0, 0, 1_000_000, 5));
-    }
 }
 

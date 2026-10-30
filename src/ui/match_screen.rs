@@ -414,10 +414,6 @@ fn link(url: &str, text: &str) -> String {
 mod match_screen_tests {
     use super::*;
 
-    fn ms_(n: u64) -> Duration {
-        Duration::from_millis(n)
-    }
-
     /// `w` x `h` maps, all cold except the listed `(x, y)` cells of each.
     fn heat(w: i32, h: i32, threat: &[(i32, i32)], sugar: &[(i32, i32)], prey: &[(i32, i32)]) -> HeatMaps {
         let warm = |cells: &[(i32, i32)]| {
@@ -436,20 +432,6 @@ mod match_screen_tests {
         }
     }
 
-    // --- stats ---
-
-    #[test]
-    fn timing_tracks_last_avg_and_max() {
-        let mut t = Timing::default();
-        assert_eq!(t.avg(), Duration::ZERO, "no samples yet");
-        for n in [2, 8, 5] {
-            t.record(ms_(n));
-        }
-        assert_eq!(t.last, ms_(5));
-        assert_eq!(t.avg(), ms_(5));
-        assert_eq!(t.max, ms_(8));
-    }
-
     #[test]
     fn observe_tick_counts_ticks_the_bot_never_saw() {
         let mut s = MatchStats::new();
@@ -459,28 +441,6 @@ mod match_screen_tests {
         assert_eq!((s.ticks_seen, s.ticks_missed), (2, 2), "12 and 13 were skipped");
         s.observe_tick(14, 14);
         assert_eq!(s.ticks_missed, 2, "a repeat is not negative");
-    }
-
-    #[test]
-    fn header_shows_progress_and_economy() {
-        let mut state = crate::bots::fixtures::state();
-        state.tick = 50;
-        state.max_ticks = 200;
-        state.you.resources = 321;
-        let rows = MatchStats::new().header("Flaud", &state);
-        assert!(rows[0].starts_with("Flaud | tick 50/200 (25%)"), "{}", rows[0]);
-        assert!(rows.iter().any(|r| r.contains("ore 321")), "{rows:?}");
-        assert!(rows.iter().any(|r| r.starts_with("Draw")), "{rows:?}");
-    }
-
-    #[test]
-    fn log_keeps_only_the_newest_lines() {
-        let mut m = MatchScreen::new("Flaud");
-        for i in 0..LOG_LIMIT + 3 {
-            m.log(&format!("\r\nline {i}"), false);
-        }
-        assert_eq!(m.log.len(), LOG_LIMIT);
-        assert_eq!(m.log.front().unwrap().0, "line 3", "oldest dropped, padding trimmed");
     }
 
     #[test]
@@ -494,50 +454,10 @@ mod match_screen_tests {
     // --- heat map ---
 
     #[test]
-    fn cube_maps_each_map_to_its_own_channel() {
-        assert_eq!(cube([0.0, 0.0, 0.0]), BLACK);
-        assert_eq!(cube([1.0, 0.0, 0.0]), 196, "threat is red");
-        assert_eq!(cube([0.0, 1.0, 0.0]), 46, "sugar is green");
-        assert_eq!(cube([0.0, 0.0, 1.0]), 21, "prey is blue");
-        assert_eq!(cube([1.0, 1.0, 1.0]), 231);
-        assert_eq!(cube([0.04, 0.0, 0.0]), BLACK, "faint heat rounds to nothing");
-        assert_eq!(cube([7.0, -1.0, 0.0]), 196, "out of range is clamped");
-    }
-
-    #[test]
-    fn heat_frame_puts_two_map_rows_in_each_text_row() {
-        let m = heat(4, 4, &[(1, 0)], &[(2, 1)], &[(3, 3)]);
-        let f = heat_frame(&m, 10, 10).unwrap();
-        assert_eq!((f.cols, f.rows, f.scale), (4, 2, 1));
-        assert_eq!(f.cells[1], (196, BLACK), "threat in the upper half");
-        assert_eq!(f.cells[2], (BLACK, 46), "sugar in the lower half");
-        assert_eq!(f.cells[4 + 3], (BLACK, 21), "prey on map row 3");
-        assert_eq!(f.cells[0], (BLACK, BLACK));
-    }
-
-    #[test]
     fn heat_frame_shrinks_big_maps_without_losing_a_lone_hot_tile() {
         let m = heat(8, 8, &[(7, 7)], &[], &[]);
         let f = heat_frame(&m, 2, 10).unwrap();
         assert_eq!((f.cols, f.rows, f.scale), (2, 1, 4));
         assert_eq!(f.cells[1], (BLACK, 196), "the corner block keeps its hottest tile");
-    }
-
-    #[test]
-    fn heat_frame_leaves_the_missing_half_row_black() {
-        let m = heat(2, 3, &[(0, 2)], &[], &[]);
-        let f = heat_frame(&m, 10, 10).unwrap();
-        assert_eq!(f.rows, 2);
-        assert_eq!(f.cells[2], (196, BLACK), "map row 2 on top, nothing under it");
-    }
-
-    #[test]
-    fn heat_frame_is_none_without_room_or_with_bad_maps() {
-        let m = heat(4, 4, &[], &[], &[]);
-        assert!(heat_frame(&m, 0, 10).is_none());
-        assert!(heat_frame(&m, 10, 0).is_none());
-        let mut short = heat(4, 4, &[], &[], &[]);
-        short.prey.pop();
-        assert!(heat_frame(&short, 10, 10).is_none());
     }
 }

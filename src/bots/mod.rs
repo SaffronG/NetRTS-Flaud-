@@ -87,42 +87,11 @@ pub mod fixtures {
 #[cfg(test)]
 mod bot_logic_tests {
     use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn default_is_flaud() {
-        assert_eq!(BotLogic::default(), BotLogic::Flaud);
-    }
-
-    #[test]
-    fn all_lists_every_variant_once() {
-        let unique: HashSet<&str> = BotLogic::ALL.iter().map(|l| l.name()).collect();
-        assert_eq!(unique.len(), BotLogic::ALL.len());
-        for l in [BotLogic::Test, BotLogic::Flaud, BotLogic::Rustala] {
-            assert!(BotLogic::ALL.contains(&l), "{l:?} missing from ALL");
-        }
-    }
-
-    #[test]
-    fn names_match_bot_types() {
-        assert_eq!(BotLogic::Test.name(), "TestBot");
-        assert_eq!(BotLogic::Flaud.name(), "Flaud");
-        assert_eq!(BotLogic::Rustala.name(), "RustalaDaora");
-    }
 
     #[test]
     fn parses_one_based_index_in_menu_order() {
         for (i, l) in BotLogic::ALL.iter().enumerate() {
             assert_eq!(BotLogic::parse(&(i + 1).to_string()), Some(*l));
-        }
-    }
-
-    #[test]
-    fn parses_name_case_insensitively() {
-        for l in BotLogic::ALL {
-            assert_eq!(BotLogic::parse(l.name()), Some(l));
-            assert_eq!(BotLogic::parse(&l.name().to_lowercase()), Some(l));
-            assert_eq!(BotLogic::parse(&l.name().to_uppercase()), Some(l));
         }
     }
 

@@ -596,11 +596,6 @@ mod console_tests {
     }
 
     #[test]
-    fn starts_with_default_logic() {
-        assert_eq!(menu().logic, BotLogic::default());
-    }
-
-    #[test]
     fn parse_setting_handles_blank_numbers_and_bounds() {
         assert_eq!(MenuContext::parse_setting("", 1), Ok(None));
         assert_eq!(MenuContext::parse_setting("250", 1), Ok(Some(250)));
@@ -632,16 +627,5 @@ mod console_tests {
         let req = m.create_request();
         assert_eq!(req.house_bots, Some(vec!["sitter".into(), "rusher".into(), "sitter".into()]));
         assert!(req.max_players.is_none());
-    }
-
-    #[test]
-    fn cursor_clamps_at_both_ends() {
-        let mut m = menu();
-        m.move_cursor(-1);
-        assert_eq!(m.cursor_pos, 0);
-        for _ in 0..10 {
-            m.move_cursor(1);
-        }
-        assert_eq!(m.cursor_pos, MENU_ITEMS - 1);
     }
 }

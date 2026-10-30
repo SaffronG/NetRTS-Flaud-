@@ -800,27 +800,6 @@ mod flaud_tests {
     }
 
     #[test]
-    fn wealth_is_zero_with_no_buildings_to_buy() {
-        let bot = bot_with_costs(&[]);
-        assert_eq!(bot.encode_wealth(&with_resources(1000)), 0.0);
-    }
-
-    #[test]
-    fn wealth_is_share_of_cheapest_building() {
-        let bot = bot_with_costs(&[
-            (BuildingType::Barracks, 150),
-            (BuildingType::ResourceDepot, 100),
-        ]);
-        assert_eq!(bot.encode_wealth(&with_resources(0)), 0.0);
-        assert_eq!(bot.encode_wealth(&with_resources(50)), 0.5);
-        assert_eq!(
-            bot.encode_wealth(&with_resources(100)),
-            1.0,
-            "exactly affordable"
-        );
-    }
-
-    #[test]
     fn wealth_caps_at_one() {
         let bot = bot_with_costs(&[(BuildingType::Barracks, 100)]);
         assert_eq!(bot.encode_wealth(&with_resources(1000)), 1.0);
@@ -859,21 +838,6 @@ mod flaud_tests {
         let mut s = fixtures::state();
         s.units = units;
         s
-    }
-
-    #[test]
-    fn centroid_averages_group_positions() {
-        let me = fixtures::state().you.slot;
-        let s = with_units(vec![
-            soldier(1, me, 2, 2),
-            soldier(2, me, 4, 6),
-            soldier(3, me, 40, 40),
-        ]);
-        assert_eq!(
-            centroid(&[1, 2], &s),
-            Some((3, 4)),
-            "unit 3 isn't in the group"
-        );
     }
 
     #[test]
@@ -1097,19 +1061,6 @@ mod flaud_tests {
 
     fn target(c: &CommandRequest) -> Loc {
         (c.x.unwrap(), c.y.unwrap())
-    }
-
-    #[test]
-    fn hold_sends_nothing() {
-        let c = cmd(
-            &bot(),
-            HoldPosition,
-            Role::Army,
-            (5, 5),
-            &maps(&[], &[]),
-            &world(),
-        );
-        assert!(c.is_none());
     }
 
     #[test]

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-29 18:15:25 MDT — Slimmed the test suite to the tests that guard current and planned work
+
+Removed 56 tests that cover finished, cosmetic or duplicated code, so the suite focuses on the brain, learning, saving, the API and the bot's decisions. Those are what `implementation_plan.md` is about to change. The hand-tuned behaviour tests (`worker_*`, `army_*`, `scout_*` in `flaud.rs`) are kept for now: whether to cut them depends on whether tuning moves to learning. `cargo test`: 206 passed, 1 ignored (before: 262 passed, 1 ignored).
+
+### Removed
+
+- `src/ui/startup.rs`: 23 of 26 tests. They pinned the CLI to the Python reference bot's argparse (flag spelling, defaults, help strings, store-true, metavars). That parity work is done, and `defines_exactly_the_python_arguments` and `help_strings_match_python` would have failed as soon as a training flag was added. Kept `definition_passes_clap_debug_assert`, `modes_conflict_in_every_combination` and `env_fallback_then_command_line_override`, and dropped the helpers only the removed tests used (`ALL_IDS`, `arg`, `matches`, `parse`, `defaults`).
+- `src/bots/rustala.rs`: the whole test module (`initial_setup`, `stub_sends_no_commands`). It only tested a stub.
+- `src/bots/mod.rs`: `default_is_flaud`, `all_lists_every_variant_once`, `names_match_bot_types`, `parses_name_case_insensitively`. Kept the index parsing and rejection tests.
+- `src/ui/match_screen.rs`: 7 of 10 tests (timing, header, log length, colour cube and three heat-frame layout tests). The visualizer is cosmetic and training will run headless. Kept `observe_tick_counts_ticks_the_bot_never_saw`, `fit_and_pad_count_characters_not_bytes` and `heat_frame_shrinks_big_maps_without_losing_a_lone_hot_tile`.
+- `src/ui/console.rs`: `starts_with_default_logic`, `cursor_clamps_at_both_ends`. Kept the `create_request_*` tests, because training rounds will build match requests.
+- `src/logic/shared.rs`: `calculate_diagonal_dist`, `really_far_dist`, `region_map_scales_by_weight`, `region_map_uses_row_major_layout`, `normalize_handles_empty_map`, `sample_reads_row_major_cell`, `uphill_stays_put_on_flat_ground`, `hottest_near_clips_its_window_at_the_edges`. These are stable helpers already covered by stronger tests. Every `*_map_*` sense-encoding test is kept.
+- `src/bots/flaud.rs`: `wealth_is_zero_with_no_buildings_to_buy`, `wealth_is_share_of_cheapest_building`, `centroid_averages_group_positions`, `hold_sends_nothing`.
+- `src/logic/connectome.rs`: the constructor tests `new_builds_one_motor_neuron_per_weight_row`, `new_builds_one_neuron_per_sense`, `new_keeps_weights_in_order`, `new_neurons_start_at_rest_with_given_params`, `new_rejects_mismatched_bias`, `new_rejects_mismatched_actions`.
+
 ## 2026-10-29 11:45:25 MDT — R-STDP step 8: learned weights persist between matches
 
 ### Added

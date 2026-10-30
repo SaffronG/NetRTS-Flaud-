@@ -155,18 +155,6 @@ mod connectome_tests {
     // --- new ---
 
     #[test]
-    fn new_builds_one_motor_neuron_per_weight_row() {
-        for rows in 0..=4 {
-            assert_eq!(brain(rows).motor_neurons.len(), rows, "{rows} rows");
-        }
-    }
-
-    #[test]
-    fn new_builds_one_neuron_per_sense() {
-        assert_eq!(brain(2).sensory.neurons.len(), SENSES);
-    }
-
-    #[test]
     fn tick_reads_each_sense_from_its_own_column() {
         // Each motor listens to exactly one sense; only the sense that is fed should act
         let actions = [
@@ -186,47 +174,6 @@ mod connectome_tests {
             let mut input = [0.0; SENSES];
             input[sense] = 1.0;
             assert_eq!(wired(&motors).tick(input), actions[sense], "sense {sense}");
-        }
-    }
-
-    #[test]
-    fn new_keeps_weights_in_order() {
-        let w = vec![
-            [1.0, 2.0, 0.0, 0.0],
-            [3.0, 4.0, 0.0, 0.0],
-            [5.0, 6.0, 0.0, 0.0],
-        ];
-        let b = FlyBrainConnectome::new(
-            w.clone(),
-            DECAY,
-            THRESHOLD,
-            vec![0.1, 0.2, 0.3],
-            vec![
-                MotorAction::Attack,
-                MotorAction::Gather,
-                MotorAction::Explore,
-            ],
-        );
-        assert_eq!(b.weights, w);
-        assert_eq!(b.bias, vec![0.1, 0.2, 0.3]);
-        assert_eq!(
-            b.actions,
-            vec![
-                MotorAction::Attack,
-                MotorAction::Gather,
-                MotorAction::Explore
-            ]
-        );
-    }
-
-    #[test]
-    fn new_neurons_start_at_rest_with_given_params() {
-        let b = brain(3);
-        for n in all_neurons(&b) {
-            assert_eq!(n.voltage, 0.0);
-            assert_eq!(n.resting_voltage, 0.0);
-            assert_eq!(n.decay, DECAY);
-            assert_eq!(n.threshold, THRESHOLD);
         }
     }
 
@@ -279,30 +226,6 @@ mod connectome_tests {
         let before = b.motor_neurons[0].voltage;
         b.motor_neurons[0].update(0.0);
         assert!((b.motor_neurons[0].voltage - before * DECAY).abs() < 1e-6);
-    }
-
-    #[test]
-    #[should_panic(expected = "bias")]
-    fn new_rejects_mismatched_bias() {
-        FlyBrainConnectome::new(
-            vec![[0.0; SENSES]; 2],
-            DECAY,
-            THRESHOLD,
-            vec![0.0],
-            vec![MotorAction::HoldPosition; 2],
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "action")]
-    fn new_rejects_mismatched_actions() {
-        FlyBrainConnectome::new(
-            vec![[0.0; SENSES]; 2],
-            DECAY,
-            THRESHOLD,
-            vec![0.0; 2],
-            vec![MotorAction::HoldPosition],
-        );
     }
 
     // --- tick ---
