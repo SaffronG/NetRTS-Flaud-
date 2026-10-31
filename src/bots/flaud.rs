@@ -33,6 +33,8 @@ const SCOUT_ALIVE: f32 = 0.1;
 /// Where learned weights are kept between matches, relative to the working
 /// directory. None in tests, so they never read or overwrite a real save.
 const BRAINS_FILE: Option<&str> = if cfg!(test) { None } else { Some("brains.json") };
+/// Will force a unit to do something if idle for too long
+const _IDLE_SHOCK: i32 = 5;
 
 struct BrainGroup {
     ids: Vec<i32>,
@@ -51,7 +53,7 @@ fn worker_brain() -> FlyBrainConnectome {
         vec![
             [0.6, 0.0, 0.0, 0.0],  // Retreat: needs ~2 spikes, so threat >= ~0.11
             [-1.0, 0.6, 0.0, 0.0], // Gather: drawn to sugar, bias covers far from it
-            [-1.0, 0.0, 0.0, 0.6], // Build: when rich and safe
+            [-1.0, 0.0, 0.0, 0.2], // Build: when rich and safe
         ],
         DECAY,
         THRESHOLD,
@@ -91,11 +93,30 @@ fn scout_brain() -> FlyBrainConnectome {
     )
 }
 
+fn trebuchet_brain() -> FlyBrainConnectome {
+    FlyBrainConnectome::new(
+        vec![
+            [0.3, 0.2, 0.6, 0.0], // Attack
+            [0.4, 0.0, -0.3, -0.3], // Retreat
+            [-1.0, 0.0, 0.3, 0.0], // Explore
+        ],
+        DECAY,
+        THRESHOLD,
+        vec![0.3, 0.2, 0.1],
+        vec![
+            MotorAction::Attack,
+            MotorAction::Retreat,
+            MotorAction::Explore,
+        ],
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Role {
     Worker,
     Army,
     Scout,
+    Trebuchet,
 }
 
 impl Role {
@@ -105,6 +126,7 @@ impl Role {
             Role::Worker => "worker",
             Role::Army => "army",
             Role::Scout => "scout",
+            Role::Trebuchet => "trebuchet",
         }
     }
 
@@ -114,6 +136,7 @@ impl Role {
             Role::Worker => worker_brain(),
             Role::Army => army_brain(),
             Role::Scout => scout_brain(),
+            Role::Trebuchet=> trebuchet_brain(),
         };
         if let Some(saved) = store.weights.get(self.key()) {
             // A save from before a motor was added or removed is ignored
@@ -327,6 +350,8 @@ impl Flaud {
     /// Rewards each group's brain for what changed since last tick, then
     /// snapshots the group for next tick. Runs after `update_groups`: `ids` are
     /// already pruned, but the snapshot still lists the units lost since.
+    /// A group with no units last tick or now is skipped: it isn't ticked, so
+    /// its eligibility is frozen, and learning would keep applying it forever.
     fn reward_groups(&mut self, s: &GameStateDto) {
         let mine: HashMap<i32, &UnitDto> = s.my_units().map(|u| (u.id, u)).collect();
         let kills: Vec<Loc> = s
@@ -341,7 +366,7 @@ impl Flaud {
             (Role::Army, &mut self.armies),
             (Role::Scout, &mut self.regiments),
         ] {
-            for g in groups.iter_mut() {
+            for g in groups.iter_mut().filter(|g| !g.ids.is_empty() || !g.last.is_empty()) {
                 let r = reward(role, g, &kills, &mine, s);
                 g.brain.learn(r);
                 g.last = Snapshot::take(&g.ids, &mine);
@@ -352,11 +377,6 @@ impl Flaud {
             self.events_through = self.events_through.max(newest);
         }
         self.enemies_last = s.enemy_units().map(|u| (u.id, (u.x, u.y))).collect();
-    }
-
-    /// Punishes groups based on last tick then snapshots it for next tick
-    fn punish_groups(&mut self, s: &GameStateDto) {
-        
     }
 
     /// Resets `units_since_build` when a building we haven't seen completed appears.
@@ -382,20 +402,30 @@ impl Flaud {
         }
     }
 
+    /// Removes dead units from groups. A wiped group stays, so `reward_groups`
+    /// can still punish it, `remember` still counts it and `join` refills it.
     fn prune(groups: &mut Vec<BrainGroup>, alive: &HashSet<i32>) {
         for g in groups.iter_mut() {
             g.ids.retain(|uid| alive.contains(uid));
         }
-        groups.retain(|g| !g.ids.is_empty());
     }
 
+    /// Adds `id` to the first group with room, or a new group if none has.
+    /// A wiped group taking its first new unit keeps its learned weights but
+    /// forgets what its dead units were doing and where they were mining.
     fn join(groups: &mut Vec<BrainGroup>, id: i32, make: impl FnOnce() -> FlyBrainConnectome) {
         match groups
             .iter_mut()
             .filter(|g| g.ids.len() < GROUP_SIZE)
             .next()
         {
-            Some(free_group) => free_group.ids.push(id),
+            Some(free_group) => {
+                if free_group.ids.is_empty() {
+                    free_group.brain.reset_state();
+                    free_group.mine.clear();
+                }
+                free_group.ids.push(id)
+            }
             None => groups.push(BrainGroup {
                 ids: vec![id],
                 brain: make(),
@@ -410,6 +440,7 @@ impl Flaud {
             Role::Worker => &self.workers,
             Role::Army => &self.armies,
             Role::Scout => &self.regiments,
+            Role::Trebuchet => &self.regiments,
         }
     }
 
@@ -550,6 +581,7 @@ impl Flaud {
                 Some(match role {
                     Role::Army => CommandRequest::attack_move(ids, x, y),
                     Role::Worker | Role::Scout => CommandRequest::move_to(ids, x, y),
+                    Role::Trebuchet => CommandRequest::move_to(ids, x, y),
                 })
             }
 
@@ -615,6 +647,7 @@ fn reward(
         }),
         Role::Scout if lost == 0.0 => SCOUT_ALIVE,
         Role::Scout => 0.0,
+        Role::Trebuchet=> 0.0,
     };
     gain - lost
 }
@@ -943,11 +976,87 @@ mod flaud_tests {
     }
 
     #[test]
-    fn wiped_out_groups_are_dropped() {
+    fn wiped_out_groups_are_kept() {
         let mut b = bot();
         b.update_groups(&with_units(vec![mine(1, UnitType::Scout)]));
         b.update_groups(&with_units(vec![]));
-        assert!(b.regiments.is_empty());
+        assert_eq!(ids(&b.regiments), vec![Vec::<i32>::new()]);
+    }
+
+    #[test]
+    fn a_wiped_out_group_is_punished() {
+        let mut b = bot();
+        let three = with_units((1..=3).map(|i| mine(i, UnitType::Worker)).collect());
+        b.update_groups(&three);
+        b.reward_groups(&three); // snapshots the 3 for next tick
+        // As if Retreat had just fired on a threat
+        b.workers[0].brain.plasticity.elig[0][THREAT] = 1.0;
+        let before = b.workers[0].brain.weights[0][THREAT];
+
+        let none = with_units(vec![]);
+        b.update_groups(&none);
+        b.reward_groups(&none);
+        let after = b.workers[0].brain.weights[0][THREAT];
+        assert!(after < before, "not punished: {before} -> {after}");
+    }
+
+    #[test]
+    fn a_wiped_out_group_stops_learning() {
+        let mut b = bot();
+        let three = with_units((1..=3).map(|i| mine(i, UnitType::Worker)).collect());
+        b.update_groups(&three);
+        b.reward_groups(&three);
+        b.workers[0].brain.plasticity.elig[0][THREAT] = 1.0;
+        let none = with_units(vec![]);
+        b.update_groups(&none);
+        b.reward_groups(&none); // the one punishment
+
+        let brain = |b: &Flaud| (b.workers[0].brain.weights.clone(), b.workers[0].brain.plasticity.r_bar);
+        let dead = brain(&b);
+        for _ in 0..5 {
+            b.update_groups(&none);
+            b.reward_groups(&none);
+        }
+        assert_eq!(brain(&b), dead, "an empty group kept learning");
+    }
+
+    #[test]
+    fn an_empty_scout_group_earns_nothing() {
+        let mut b = bot();
+        let one = with_units(vec![mine(1, UnitType::Scout)]);
+        b.update_groups(&one);
+        b.reward_groups(&one);
+        let none = with_units(vec![]);
+        b.update_groups(&none);
+        b.reward_groups(&none); // -1 for the lost scout
+        let r_bar = b.regiments[0].brain.plasticity.r_bar;
+        for _ in 0..5 {
+            b.update_groups(&none);
+            b.reward_groups(&none);
+        }
+        assert_eq!(b.regiments[0].brain.plasticity.r_bar, r_bar, "rewarded for losing nobody");
+    }
+
+    #[test]
+    fn a_refilled_group_keeps_its_weights_and_starts_clean() {
+        let mut b = bot();
+        b.update_groups(&with_units(vec![mine(1, UnitType::Worker)]));
+        let g = &mut b.workers[0];
+        g.brain.weights[1][SUGAR] = 0.9;
+        g.brain.plasticity.r_bar = -0.3;
+        g.brain.plasticity.elig[0][THREAT] = 1.0;
+        g.brain.motor_neurons[0].voltage = 0.42;
+        g.mine = vec![5];
+
+        b.update_groups(&with_units(vec![]));
+        b.update_groups(&with_units(vec![mine(7, UnitType::Worker)]));
+        assert_eq!(ids(&b.workers), vec![vec![7]], "refilled, not a new group");
+        let g = &b.workers[0];
+        assert_eq!(g.brain.weights[1][SUGAR], 0.9, "learning kept");
+        assert_eq!(g.brain.plasticity.r_bar, -0.3, "baseline kept");
+        assert_eq!(g.brain.plasticity.elig[0][THREAT], 0.0, "old eligibility kept");
+        assert_eq!(g.brain.motor_neurons[0].voltage, 0.0, "old voltage kept");
+        assert!(g.mine.is_empty(), "old claim kept: {:?}", g.mine);
     }
 
     #[test]
@@ -959,6 +1068,7 @@ mod flaud_tests {
             mine(2, UnitType::Worker),
         ]));
         b.workers[0].brain.motor_neurons[0].voltage = 0.42;
+        b.workers[0].brain.plasticity.elig[0][THREAT] = 1.0;
 
         b.update_groups(&with_units(vec![
             mine(1, UnitType::Worker),
@@ -966,6 +1076,7 @@ mod flaud_tests {
         ]));
         assert_eq!(ids(&b.workers), vec![vec![1, 3]], "2 died, 3 joined");
         assert_eq!(b.workers[0].brain.motor_neurons[0].voltage, 0.42);
+        assert_eq!(b.workers[0].brain.plasticity.elig[0][THREAT], 1.0, "a partly filled group was reset");
     }
 
     #[test]

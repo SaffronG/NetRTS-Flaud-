@@ -32,43 +32,65 @@ The worst outcome gets no punishment. The eligibility trace $e_{m,s}$, which lin
 
 `remember` (`src/bots/flaud.rs:314`) then averages only the groups still alive. After a total wipe, `average_weights` returns `None` and the role keeps last match's weights, so the match taught nothing. Even when some groups survive, only the survivors' weights are saved. That's **survivorship bias**: the brains that learned "don't do that" are forgotten.
 
-### Step 1: Punish before discarding
+### The approach: groups are never removed
 
-Make sure a group that loses its last unit still gets `learn(r)` with its losses before it's removed. Choose one:
+**Decided:** instead of dropping empty groups (or moving them to a graveyard), a group stays in its role's `Vec` for the whole match. `prune` only removes dead *ids*. `join` already fills the **first** group with room, so a wiped group is refilled top-down before a new group is created.
 
-- **(a) Reorder the steps:** reward → prune → add new units → snapshot. `Snapshot::lost` compares last tick's ids with who is alive now, so it doesn't need the group pruned first. Watch out for new units joining *after* the snapshot: they're missing from `last` for a tick, so check that this doesn't count as a loss or a missed delivery.
-- **(b) Split `prune`:** drop dead *ids* before the reward (as now), and drop *empty groups* only after `reward_groups` has run. This is the smaller change to the order, so it's easier to reason about. One thing to check: `Snapshot::lost` must still see the dead ids. It reads `g.last`, not `g.ids`, so this should work, but confirm it with a test.
+This fixes both problems at once:
 
-*Recommended: (b).*
+- A wiped group still exists when `reward_groups` runs, and its `last` snapshot still lists the units that died, so it gets its −1 per lost unit.
+- `remember` averages every group, dead or alive, so there's no survivorship bias and no graveyard code.
+- The number of groups is capped at about peak unit count ÷ `GROUP_SIZE`. A graveyard would grow by one brain per wipe, and brains that died on their first tick would drag the average back toward the starting weights.
+- A brain that learned "that got everyone killed" is handed to the next units instead of being retired.
+
+Keeping empty groups around needs three fixes, one step each.
+
+### Step 1: Stop removing empty groups
+
+`prune` keeps only its `ids.retain` loop. A wiped group stays in place with empty `ids`. `decide` already skips groups with no centroid, so an empty group sends no commands.
 
 **Tests:**
-- **A wiped group is punished.** Build a group of 3 units with a `last` snapshot. Give it a state where none of them is alive, run a tick, and assert its brain's weights moved in the punished direction for the eligible synapse (set up the eligibility first, as `threat_fired` does in `connectome.rs`). This fails today.
-- **A partly killed group is still punished the same way.** This guards against a regression.
+- **A wiped group is kept** (replaces `wiped_out_groups_are_dropped`).
+- **A wiped group is punished.** A group of units with a `last` snapshot and eligibility on one synapse loses every unit. After `update_groups` + `reward_groups`, that weight has moved in the punished direction. This failed before, because the group was dropped first.
 
-### Step 2: Keep dead brains in a graveyard
+### Step 2: Only living groups learn
 
-When an empty group is dropped (after its final punishment), move its `FlyBrainConnectome` into a per-role list on `Flaud` (for example `fallen: [Vec<…>; 3]`, or one `Vec` per role) instead of dropping it. `remember` then averages living **and** fallen brains.
+An empty group isn't ticked, so its traces never decay. If `reward_groups` kept calling `learn` on it, $d = 0 - \bar r \ne 0$ would keep moving its weights through the eligibility frozen at the moment of the wipe, every tick, forever. A scout group would also earn `SCOUT_ALIVE` every tick for "losing nobody", since its empty `last` has nobody to lose.
 
-Rust note: `Vec::retain` can't hand you the removed items. Use `Vec::extract_if` (stable since Rust 1.87), or `std::mem::take` the vector and partition it with `Iterator::partition`. Either way the brain is **moved**, not cloned.
+**Rule:** a group learns only if it had units last tick **or** has units now. On the tick of a wipe, `last` still has the dead units, so the punishment goes through once. After that both are empty, so `learn` is skipped (and so is the `r_bar` update). Needs `Snapshot::is_empty`.
 
-### Step 3: Decide how much each brain counts
+**Tests:**
+- **A wipe is punished exactly once:** after the wipe tick, more empty ticks leave the weights and `r_bar` unchanged.
+- **An empty scout group earns nothing.**
+
+### Step 3: A refilled group starts its new life clean
+
+When `join` puts a unit into an empty group, the group keeps its **weights** (the learning) but clears its short-term state: membrane voltages, the pre/post/eligibility traces and the worker's `mine` claim. Otherwise the new units' first rewards would be credited to the dead units' last actions, made somewhere else on the map, and a stale claim would block other groups from that chunk. `r_bar` is kept: it's the brain's sense of what reward is normal, and that still applies. Needs `FlyBrainConnectome::reset_state`.
+
+**Tests:**
+- **Refill keeps weights, clears state:** wipe a group, join a new unit. Same index, same weights, zero traces and voltages, empty `mine`, `r_bar` unchanged.
+- **No new group while an empty one exists:** a new unit joins the empty group at index 0 and the group count doesn't grow.
+- **A partly filled group is not reset** when a unit joins it.
+
+### Step 3b: Decide how much each brain counts
 
 **The decision: equal votes or weighted by lifetime?**
 
 $$W^{role}_{m,s} = \frac{\sum_g \ell_g\, W^{(g)}_{m,s}}{\sum_g \ell_g}$$
 
-- $W^{(g)}_{m,s}$: group $g$'s weight from sense $s$ to motor $m$ when it died or when the match ended (`f32`, in $[-W_{max}, W_{max}]$)
-- $\ell_g$: how many times group $g$ called `learn`, i.e. ticks lived (`u32`, ≥ 1). Needs a counter on `BrainGroup` or `Plasticity`
-- $g$: ranges over living and fallen groups of the role
+- $W^{(g)}_{m,s}$: group $g$'s weight from sense $s$ to motor $m$ at the end of the match (`f32`, in $[-W_{max}, W_{max}]$)
+- $\ell_g$: how many times group $g$ called `learn` (`u32`). Since Step 2 skips `learn` for empty groups, this counts only the ticks the brain had units, across all its lives. Needs a counter on `BrainGroup` or `Plasticity`
+- $g$: ranges over every group of the role, empty or not. A group with $\ell_g = 0$ adds nothing
 
-Each brain counts in proportion to how much it experienced. A group that died on its first tick has barely moved from its starting weights, so with an equal vote it would pull the average back toward the start. With $\ell_g = 1$ for every group, this is the plain average used now (`average_weights`, `src/bots/flaud.rs:582`).
+Each brain counts in proportion to how much it experienced. A group that was wiped on its first tick has barely moved from its starting weights, so with an equal vote it would pull the average back toward the start. With $\ell_g = 1$ for every group, this is the plain average used now (`average_weights`, `src/bots/flaud.rs:582`).
 
 It's still a convex combination (non-negative weights that add up to 1), so if every $W^{(g)}$ obeys Dale's law and lies in $[0, W_{max}]$ or $[-W_{max}, 0]$, the result does too. No clipping is needed.
 
 *Recommended: weight by lifetime.*
 
 **Tests:**
-- **A total wipe still produces weights.** Every group dies; `remember` stores weights for that role (it doesn't keep the old ones) and they differ from the starting weights.
+- **A total wipe still produces weights.** Every group is wiped; `remember` stores weights for that role (it doesn't keep the old ones) and they differ from the starting weights. (With Steps 1–2 alone this already holds, since empty groups stay in the `Vec`.)
+- **If every group has $\ell = 0$** (a role whose groups never learned), fall back to the plain average, so the sum in the denominator is never 0.
 - **Lifetime weighting.** One group with $\ell = 1$ and weight 0.0, one with $\ell = 3$ and weight 1.0: the stored weight is 0.75.
 - **The existing `remember` tests still pass** (`src/bots/flaud.rs:1998` onward).
 
@@ -99,7 +121,7 @@ Each instance keeps a running snapshot of each role's weights **in memory**, upd
 
 **The math**
 
-At snapshot $k$, first take the role's current weights, lifetime-weighted over living **and** fallen groups (the same rule as Step 3):
+At snapshot $k$, first take the role's current weights, lifetime-weighted over every group of the role, empty or not (the same rule as Step 3b):
 
 $$W_k = \frac{\sum_g \ell_g\, W^{(g)}}{\sum_g \ell_g}$$
 
@@ -111,7 +133,7 @@ $$S_1 = W_1, \qquad S_k = \beta\, S_{k-1} + (1-\beta)\, W_k \quad (k \ge 2)$$
 - $S_k$: the running snapshot after $k$ snapshots, same shape
 - $\beta \in [0, 1)$: how much of the old snapshot to keep (suggested name `SNAPSHOT_KEEP`)
 - $\tau$: ticks between snapshots (suggested name `SNAPSHOT_EVERY`)
-- $\ell_g$, $W^{(g)}$: as in Step 3
+- $\ell_g$, $W^{(g)}$: as in Step 3b
 
 In plain words, each snapshot moves the running value a fraction $1-\beta$ of the way toward the current weights. A snapshot taken $j$ steps ago counts with weight $(1-\beta)\beta^{j}$, so older ones fade out geometrically. The memory is about $\frac{1}{1-\beta}$ snapshots, or $\frac{\tau}{1-\beta}$ ticks.
 
@@ -128,7 +150,7 @@ It is still a convex combination of weights that obey Dale's law and the $\pm W_
 **Steps**
 
 1. A small struct per role (for example in `memory.rs`) holding `Option<Vec<[f32; SENSES]>>`: `None` until the first snapshot. Use `None` rather than zeros, because initializing $S_0 = 0$ would drag every weight toward 0 and look like "weakening" on the graph. A method `fold(&mut self, w, beta)` applies the recurrence above.
-2. In `Flaud::decide`, every `SNAPSHOT_EVERY` ticks (`state.tick % SNAPSHOT_EVERY == 0`), compute $W_k$ for each role from living groups plus the graveyard, and `fold` it in.
+2. In `Flaud::decide`, every `SNAPSHOT_EVERY` ticks (`state.tick % SNAPSHOT_EVERY == 0`), compute $W_k$ for each role from all its groups, and `fold` it in.
 3. In the end-of-match path (Step 4), take **one last snapshot** before returning, so the final stretch after the last multiple of $\tau$ counts too.
 4. If a role never got a snapshot (a very short match, or the role never existed), fall back to its lifetime-weighted final weights, or leave it out so the merge keeps the stored value, as `remember` does now.
 5. Normal play's `finish` can save the snapshot too, so single matches and training rounds carry the same thing forward.
@@ -138,7 +160,7 @@ It is still a convex combination of weights that obey Dale's law and the $\pm W_
 - **The recurrence.** $\beta = 0.5$: fold 0.0, then 1.0, then 1.0. The snapshot is 0.75.
 - **Constant weights are a fixed point.** Fold the same $W$ ten times: the snapshot equals $W$.
 - **Bounds hold.** Fold random values within $[0, W_{max}]$: the snapshot stays inside.
-- **The graveyard is included.** A group that dies between two snapshots still shows up in the next $W_k$ (through Step 2's graveyard).
+- **Wiped groups are included.** A group wiped between two snapshots still shows up in the next $W_k$, since groups are never removed.
 - **The last snapshot is taken.** A match ending at a tick that isn't a multiple of $\tau$ still folds in its final weights.
 
 **Afterwards:** add the moving-average equation to the "Current fly-brain equations" section in `CLAUDE.md`.
@@ -199,7 +221,7 @@ No `Mutex` is needed. Nothing mutable is shared, and results come back as the ta
 
 ### Step 8: Average across instances
 
-The same rule as Step 3, one level up:
+The same rule as Step 3b, one level up:
 
 $$W^{new}_{m,s} = \frac{\sum_{i} L_i\, W^{(i)}_{m,s}}{\sum_i L_i}$$
 
@@ -258,8 +280,8 @@ Later, if wanted: sparklines in the terminal visualizer (crossterm only), or `ra
 
 | # | Decision | Recommended |
 |---|---|---|
-| 1 | Punish before pruning: reorder or split `prune` (Step 1) | Split `prune` |
-| 2 | Weighting for dead and living brains (Steps 3 and 8) | By lifetime $\ell$ |
+| 1 | Punish before pruning (Phase 1) | **Decided:** never remove groups; only living groups learn; refilled groups reset their short-term state |
+| 2 | Weighting for dead and living brains (Steps 3b and 8) | By lifetime $\ell$ |
 | 3 | What to randomize (Step 6) | Map seed + stratified opponent; map size only if the competition varies it |
 | 4 | `matches`: +n or +1 per round; add `rounds`? (Step 8) | +n, and add `rounds` |
 | 5 | History format (Step 10) | CSV |
@@ -267,4 +289,4 @@ Later, if wanted: sparklines in the terminal visualizer (crossterm only), or `ra
 | 7 | Snapshot aggregate (Step 4a) | **Decided:** exponential moving average |
 | 8 | `SNAPSHOT_EVERY` $\tau$ and the horizon for $\beta$ (Step 4a) | $\tau = 50$, horizon = last quarter of the match ($\beta = 1 - 4\tau/T$) |
 
-**Next:** Phase 1, Step 1, the test that a wiped group gets punished. Write it first and watch it fail.
+**Next:** Phase 1, Step 1: stop removing empty groups, with the test that a wiped group gets punished.

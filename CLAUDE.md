@@ -128,3 +128,9 @@ $\lambda_x$ is `TRACE_DECAY` (0.9) and $\lambda_e$ is `ELIG_DECAY` (0.95). $e$ u
 $$d = r - \bar r, \quad \bar r \leftarrow \bar r + \alpha d, \quad W_{m,s} \leftarrow \operatorname{sgn}(W^0_{m,s})\,\operatorname{clip}\big(\operatorname{sgn}(W^0_{m,s})(W_{m,s} + \eta\, d\, e_{m,s}),\,0,\,W_{max}\big)$$
 
 $\eta$ is `ETA` (0.002), $\alpha$ is `REWARD_WEIGHT` (0.05) and $W_{max}$ is `W_MAX` (2.0). $\operatorname{sgn}(0) = 0$, so weights that start at 0 stay at 0 (Dale's law).
+
+**Group lifecycle** (`src/bots/flaud.rs`). Groups are never removed during a match. A group learns on a tick only if it had units last tick or has units now:
+
+$$\text{learn}_g \iff |\text{ids}_g| > 0 \;\lor\; |\text{last}_g| > 0$$
+
+so a wiped group is punished once and then frozen. When `join` refills an empty group, `reset_state` sets every $V \leftarrow V_{rest}$ and $x, y, e \leftarrow 0$, keeping $W$ and $\bar r$.

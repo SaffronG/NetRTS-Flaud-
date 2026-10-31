@@ -76,6 +76,14 @@ impl Plasticity {
             *y = TRACE_DECAY * *y + won;
         }
     }
+
+    /// Forgets recent spikes, wins and eligibility. Keeps `r_bar` and `sign`,
+    /// which describe the brain, not what it was just doing.
+    pub fn clear_traces(&mut self) {
+        self.pre = [0.0; SENSES];
+        self.post.fill(0.0);
+        self.elig.fill([0.0; SENSES]);
+    }
 }
 
 #[cfg(test)]

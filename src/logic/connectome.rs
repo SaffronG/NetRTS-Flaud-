@@ -95,6 +95,15 @@ impl FlyBrainConnectome {
         true
     }
 
+    /// Puts every neuron back at rest and clears the learning traces, keeping
+    /// the weights and the reward baseline. For a brain handed to new units.
+    pub fn reset_state(&mut self) {
+        for n in self.sensory.neurons.iter_mut().chain(&mut self.motor_neurons) {
+            n.reset();
+        }
+        self.plasticity.clear_traces();
+    }
+
     /// Nudges every weight by its eligibility times how much better (or worse)
     /// `reward` was than usual, then holds it to its starting sign (`bound`). Lives here rather than on `Plasticity` because
     /// it borrows `weights` and `plasticity` mutably at once, which the borrow
@@ -405,6 +414,20 @@ mod connectome_tests {
         let mut b = threat_fired();
         b.learn(1.0);
         assert_eq!(b.weights[1], [0.0, THRESHOLD, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reset_state_clears_voltages_and_traces_but_keeps_what_was_learned() {
+        let mut b = threat_fired();
+        b.plasticity.r_bar = 0.5;
+        b.motor_neurons[1].voltage = 0.3;
+        let weights = b.weights.clone();
+        b.reset_state();
+        assert!(b.motor_neurons.iter().chain(&b.sensory.neurons).all(|n| n.voltage == 0.0));
+        assert!(b.plasticity.pre.iter().chain(&b.plasticity.post).all(|&x| x == 0.0));
+        assert!(b.plasticity.elig.iter().flatten().all(|&e| e == 0.0));
+        assert_eq!(b.weights, weights);
+        assert_eq!(b.plasticity.r_bar, 0.5);
     }
 
     #[test]

@@ -56,6 +56,11 @@ impl Snapshot {
         }
     }
 
+    /// True if the group had no units last tick.
+    pub fn is_empty(&self) -> bool {
+        self.carrying.is_empty()
+    }
+
     /// Units in the group last tick that are gone now.
     pub fn lost(&self, mine: &HashMap<i32, &UnitDto>) -> usize {
         self.carrying
@@ -95,6 +100,12 @@ mod memory_tests {
         store.save(&path).unwrap();
         assert_eq!(BrainStore::load(&path), store);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_snapshot_of_only_dead_units_is_empty() {
+        assert!(Snapshot::default().is_empty());
+        assert!(Snapshot::take(&[1, 2], &HashMap::new()).is_empty(), "nobody in `mine` is alive");
     }
 
     #[test]

@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-10-30 22:51:17 MDT — Learn from death, step 3: a refilled group starts clean
+
+`cargo test`: 212 passed, 1 ignored.
+
+### Added
+
+- `src/logic/learning.rs:82`: `Plasticity::clear_traces` zeroes `pre`, `post` and `elig`. It keeps `r_bar` (what reward is normal for this brain) and `sign` (Dale's law).
+- `src/logic/connectome.rs:100`: `FlyBrainConnectome::reset_state` puts every sensory and motor neuron back at rest and calls `clear_traces`. The weights are untouched.
+
+### Changed
+
+- `src/bots/flaud.rs:393`: when `join` puts a unit into a group with no ids (a wiped group), it calls `reset_state` and clears the group's `mine` claim first. Before, a wiped group isn't ticked, so it kept its voltages and traces exactly as they were at the wipe. The new units' first rewards would have been credited to the dead units' last actions, made somewhere else on the map, and a worker group's old claim blocked other groups from that chunk until it was refilled. A group that still has units is not reset when another joins.
+
+### Math
+
+**Starting a new life** (`src/logic/connectome.rs:100`)
+
+$$V \leftarrow V_{rest}, \qquad x_s \leftarrow 0, \qquad y_m \leftarrow 0, \qquad e_{m,s} \leftarrow 0$$
+
+$$W_{m,s},\; \bar r \text{ unchanged}$$
+
+- $V$: every sensory and motor neuron's voltage (`voltage`), $V_{rest}$ is `resting_voltage` (0.0)
+- $x_s$, $y_m$: the pre and post traces (`pre`, `post`)
+- $e_{m,s}$: eligibility (`elig`)
+
+With $e = 0$, the next $\eta\, d\, e_{m,s}$ is 0 until the new units' own spikes and actions build eligibility again. Rewards are credited only to what the new units do. The weights carry what the brain learned in earlier lives, and $\bar r$ keeps its sense of a normal reward, so a refilled group behaves like a new group started from that brain's weights, except that it isn't surprised all over again by ordinary rewards.
+
+### Tests
+
+- `src/bots/flaud.rs`: `a_refilled_group_keeps_its_weights_and_starts_clean`. A worker group with a changed weight, `r_bar`, eligibility, voltage and `mine` is wiped, then a new worker joins. It's the same group (no new one is made), the weight and `r_bar` are kept, and eligibility, voltage and `mine` are cleared.
+- `src/bots/flaud.rs`: `surviving_groups_keep_their_brain` also checks that a partly filled group keeps its eligibility when a unit joins.
+- `src/logic/connectome.rs`: `reset_state_clears_voltages_and_traces_but_keeps_what_was_learned`.
+
+## 2026-10-30 22:50:04 MDT — Learn from death, step 2: only living groups learn
+
+`cargo test`: 210 passed, 1 ignored.
+
+### Added
+
+- `src/logic/memory.rs`: `Snapshot::is_empty`, true if the group had no units last tick.
+
+### Changed
+
+- `src/bots/flaud.rs`: `reward_groups` skips a group that had no units last tick **and** has none now. On the tick of a wipe, `last` still lists the dead units, so the punishment goes through once. After that, the group neither learns nor moves its `r_bar`. Before (once step 1 kept empty groups), two things went wrong. An empty group isn't ticked, so its eligibility stayed frozen at the moment of the wipe, and `learn` kept applying it every tick through $d = 0 - \bar r$. An empty scout group also earned `SCOUT_ALIVE` every tick, because an empty `last` has nobody to lose.
+
+### Math
+
+**Which groups learn** (`src/bots/flaud.rs:346`)
+
+$$\text{learn}_g \iff |\text{ids}_g| > 0 \;\lor\; |\text{last}_g| > 0$$
+
+- $\text{ids}_g$: group $g$'s living units this tick (`g.ids`)
+- $\text{last}_g$: its units as of last tick (`g.last`)
+
+The update itself, $W_{m,s} \leftarrow W_{m,s} + \eta\,(r - \bar r)\,e_{m,s}$, is unchanged. This only decides who gets it. A wiped group gets one last update with $r = -(\text{units lost})$, then its weights stay as they were at death until `join` refills it. Without the rule, a group wiped with $\bar r < 0$ would get $d = -\bar r > 0$ on every empty tick and slowly *reinforce* the actions that got it killed.
+
+### Tests
+
+- `src/bots/flaud.rs`: `a_wiped_out_group_stops_learning`: after the punishment tick, five more empty ticks leave the weights and `r_bar` unchanged.
+- `src/bots/flaud.rs`: `an_empty_scout_group_earns_nothing`: a wiped scout group's `r_bar` doesn't move on later empty ticks.
+- `src/logic/memory.rs`: `a_snapshot_of_only_dead_units_is_empty`.
+- Both `flaud.rs` tests fail with the filter removed (checked).
+
+## 2026-10-30 22:49:03 MDT — Learn from death, step 1: wiped groups are kept
+
+Phase 1 of `implementation_plan.md`, now built around keeping every group for the whole match instead of a graveyard. `cargo test`: 207 passed, 1 ignored.
+
+### Changed
+
+- `src/bots/flaud.rs`: `prune` only removes dead ids and no longer drops groups left with none (`groups.retain(|g| !g.ids.is_empty())` is gone). Before, a group that lost every unit was dropped inside `update_groups`, before `reward_groups` ran, so the worst outcome was never punished and `remember` averaged only the survivors. Now the wiped group is still there with a `last` snapshot that lists the dead units, so it gets −1 per lost unit. `decide` already skips groups with no centroid, so an empty group sends no commands. `join` already fills the first group with room, so a wiped group is refilled before a new one is made.
+- `src/bots/flaud.rs`: removed the empty `punish_groups` stub, a stray blank line in `decide` and a stray space in `next_building`.
+
+### Docs
+
+- `implementation_plan.md`: Phase 1 rewritten for this approach. Step 1 stops removing groups, Step 2 lets only living groups learn, Step 3 resets a refilled group's short-term state, and lifetime weighting moves to Step 3b. The graveyard references in Phase 2 and in the decisions table now point to "all groups".
+
+### Tests
+
+- `src/bots/flaud.rs`: `wiped_out_groups_are_dropped` becomes `wiped_out_groups_are_kept`: the scout group is still there with no ids.
+- `src/bots/flaud.rs`: `a_wiped_out_group_is_punished`. Three workers are snapshotted, Retreat's threat synapse is made eligible, then all three die. The weight goes down. Before this change, the test panicked because the group was gone.
+
 ## 2026-10-29 18:15:25 MDT — Slimmed the test suite to the tests that guard current and planned work
 
 Removed 56 tests that cover finished, cosmetic or duplicated code, so the suite focuses on the brain, learning, saving, the API and the bot's decisions. Those are what `implementation_plan.md` is about to change. The hand-tuned behaviour tests (`worker_*`, `army_*`, `scout_*` in `flaud.rs`) are kept for now: whether to cut them depends on whether tuning moves to learning. `cargo test`: 206 passed, 1 ignored (before: 262 passed, 1 ignored).
