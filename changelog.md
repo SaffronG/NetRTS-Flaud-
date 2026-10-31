@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-10-30 23:35:36 MDT — Weight history graph in the menu
+
+`cargo build` clean; `cargo test`: 227 passed, 1 ignored.
+
+### Added
+
+- `src/ui/history_screen.rs`: `show` draws `brain_history.csv` as one graph per role. Left/right (or a/d, h/l, Tab) switch role, and q, Esc or Enter go back. A missing file shows a short "no history yet" message.
+  - The y axis is fixed at $[-W_{max}, W_{max}] = [-2, 2]$ with 21 rows (0.2 per row) and a dashed zero line, so a weight pinned at 0 or at the limit stands out.
+  - The x axis spaces matches by their number, not their count, so a gap in the logged matches shows as a gap.
+  - Each weight is drawn as straight segments between its points, with its own symbol and colour, so crossing lines can still be told apart.
+  - The legend shows each weight's start → end and change, and flags `dead (pinned at 0)` or `saturated (at the limit)`.
+  - `plot` builds the grid separately from the drawing, so it can be tested without a terminal.
+- `src/ui/console.rs`: a `[ ] Weight History` main-menu entry (`HISTORY_ITEM` = 6) that opens the graph, the same way `Configure Match` opens its submenu.
+- `brain_history.csv`: backfilled from the saves in git, so the graph has data straight away. Match 0 is the hand-tuned brains, then 3 (`98d2d85`), 13 (`1c6cdc0`) and 21 (the restored `brains.json`). That's 15 synapses × 4 snapshots = 60 rows. Trebuchet rows start at the next match.
+
+### Fixed
+
+- `src/ui/console.rs`: `MENU_ITEMS` was 8 with only 6 entries shown, so the cursor could move onto two invisible rows. It's now 7, matching the entries.
+
+### Math
+
+**Plot mapping** (`src/ui/history_screen.rs`, `row_of` and `plot`)
+
+$$\text{row}(w) = \operatorname{round}\!\left(\frac{W_{max} - w}{2W_{max}}\,(H-1)\right), \qquad \text{col}(m) = \operatorname{round}\!\left(\frac{m - m_{first}}{m_{last} - m_{first}}\,(C-1)\right)$$
+
+$$w(c) = w_0 + t\,(w_1 - w_0), \qquad t = \frac{c - c_0}{c_1 - c_0}$$
+
+- $w$: a weight (`f32`), clipped to the plot; $W_{max}$ is `W_MAX` (2.0)
+- $H$: plot rows (`PLOT_H`, 21), so row 0 is $+2$, row 10 is 0 and row 20 is $-2$
+- $m$: a match number; $C$: plot columns (terminal width minus the axis, between 10 and 120)
+- $c_0, c_1$: the columns of two neighbouring points, and $w(c)$ is the line between them
+
+### Tests
+
+- `src/ui/history_screen.rs` (`history_screen_tests`): the row mapping (top, zero, bottom, clipping); a flat line fills its row; a rising line passes 0 halfway; matches are spaced by number; a single point is drawn; no points draw nothing; the legend flags dead and saturated weights.
+
+## 2026-10-30 23:33:02 MDT — Weight history log
+
+`cargo test`: 220 passed, 1 ignored.
+
+### Added
+
+- `src/logic/history.rs`: a new module for `brain_history.csv`, with columns `match,role,motor,action,sense,weight`. `append` opens the file in append mode and writes the header only when the file is new or empty, so earlier rows are never rewritten. `load` reads it back and skips lines that don't parse. `series` groups the rows of one role into one line per (motor, sense), sorted by match; if a match was logged twice, the later row wins. `roles` lists the roles in the order they first appear. It's per match for now. Phase 5's per-round columns (`run`, `round_seed`, `min`/`max`) can be added once training rounds exist.
+- `src/bots/flaud.rs:636`: `history_rows` turns the saved `BrainStore` into one row per real synapse of every role. Synapses that start at 0 are skipped, because Dale's law keeps them at 0. A role whose saved shape no longer matches its brain is skipped too, as `load_weights` would skip it.
+- `src/bots/flaud.rs`: `Role::ALL`, the four roles in order.
+
+### Changed
+
+- `src/bots/flaud.rs:266`: after saving `brains.json`, `finish` appends that match's rows to `brain_history.csv` (`HISTORY`, `None` under `cfg!(test)` like `BRAINS_FILE`). It appends only after a successful save, so the history never shows weights that weren't kept. A failed save now returns early through `?`.
+
+### Tests
+
+- `src/logic/history.rs` (`history_tests`): a CSV round trip; the header and bad lines (unknown sense, missing or extra column) are skipped; appending twice writes one header and keeps the first rows; `series` groups and sorts by match; a match logged twice keeps the later value; `roles` keeps first-seen order.
+- `src/bots/flaud.rs`: `history_logs_each_real_synapse_of_a_saved_role` (5 worker rows, labelled by action) and `history_skips_unsaved_roles_and_saves_of_the_wrong_shape`.
+
+## 2026-10-30 23:33:02 MDT — Restored the learned brains, safe trebuchet scaffolding, Build weight back to 0.6
+
+### Fixed
+
+- `brains.json`: restored the 21-match weights from commit `cabe8ba`. That commit's file ended with an extra `}`, so it wasn't valid JSON. `BrainStore::load` treats a file that won't parse as missing, so the next match started from the hand-tuned brains and its save overwrote the file (`matches: 2`, worker only). The restored file drops the stray brace.
+- `src/bots/flaud.rs` (`worker_brain`): the Build wealth weight is back to 0.6 (you made this change; logged here). At 0.2, Build could never fire (see Math), which failed `worker_builds_when_rich_and_calm` and `worker_near_sugar_and_rich_both_gathers_and_builds`.
+- `src/bots/flaud.rs`: `groups(Role::Trebuchet)` returned the scouts' `regiments`. Once trebuchets were grouped, `command` would have looked up trebuchet indices in the scout list, which panics if the index is out of range and otherwise gives scouts the trebuchets' orders.
+
+### Added
+
+- `brains.json`: a `"trebuchet"` entry holding `trebuchet_brain`'s starting weights. `remember` keeps the saved weights of a role that has no groups, so this entry carries over untouched until trebuchets are actually used.
+- `src/bots/flaud.rs:160`: `trebuchets: Vec<BrainGroup>`, now in every role list: ticking in `decide`, pruning and the `assigned` set in `update_groups`, `reward_groups`, `remember` and `groups`. It stays empty, because `update_groups` still has no `UnitType::Trebuchet` arm and nothing produces trebuchets. That's deliberate: trebuchet support isn't finished, and it no longer breaks anything.
+
+### Math
+
+**Why Build at 0.2 never fired** (`src/bots/flaud.rs`, `worker_brain`)
+
+$$V_\infty = \frac{I}{1-\lambda}, \qquad I = b_{build} + W_{build,wealth} = 0 + w$$
+
+- $\lambda$: `DECAY` (0.8), $\theta$: `THRESHOLD` (1.0)
+- $w$: Build's wealth weight. The wealth neuron spikes every tick once wealth ≥ 0.2, so $w$ is added every tick
+
+The voltage climbs toward $V_\infty$ and never passes it, so Build can fire only if $w/(1-\lambda) > \theta$, which means $w > 0.2$. At $w = 0.2$, $V_t = 1 - 0.8^t$, which is always below 1. The ticks between firings are the smallest $t$ with $\frac{w}{0.2}(1 - 0.8^t) \ge 1$: 2 ticks at 0.6 (restored), 5 at 0.3, 8 at 0.25. In games, the saved weight (1.48) overrides this value; it matters for tests and fresh saves.
+
 ## 2026-10-30 22:51:17 MDT — Learn from death, step 3: a refilled group starts clean
 
 `cargo test`: 212 passed, 1 ignored.

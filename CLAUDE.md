@@ -4,8 +4,8 @@ NetRTS(Flaud) is a Rust bot for a simplified StarCraft (NetRTS), built for the S
 
 - `src/bots/` — the bots: `flaud.rs` (fly-brain driven), `rustala.rs` (algorithm based), `test_bot.rs` (port of the example bot)
 - `src/data/` — the API models (`models.rs`) and `schema_drift.rs`, a test that diffs them against the server's OpenAPI spec (`fixtures/openapi.json`)
-- `src/logic/` — the API client (`api.rs`) and the fly brain: `neurons.rs` (LIF neuron), `sensory.rs` (sense encoding), `connectome.rs` (motor layer and action choice)
-- `src/ui/` — terminal menu, startup and the match visualizer
+- `src/logic/` — the API client (`api.rs`) and the fly brain: `neurons.rs` (LIF neuron), `sensory.rs` (sense encoding), `connectome.rs` (motor layer and action choice), `learning.rs` (R-STDP), `memory.rs` (`brains.json` and group snapshots), `history.rs` (`brain_history.csv`, one row per weight per match)
+- `src/ui/` — terminal menu, startup, the match visualizer and `history_screen.rs` (the "Weight History" graph)
 
 ```shell
 cargo build

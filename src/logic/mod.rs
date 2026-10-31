@@ -5,3 +5,4 @@ pub mod sensory;
 pub mod shared;
 pub mod learning;
 pub mod memory;
+pub mod history;

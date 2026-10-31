@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::logic::connectome::{FlyBrainConnectome, MotorAction};
 use crate::data::models::*;
+use crate::logic::history;
 use crate::logic::memory::{BrainStore, Snapshot};
 use crate::logic::sensory::{PREY, SENSES, SUGAR, THREAT, WEALTH};
 use crate::logic::shared::{
@@ -33,6 +34,8 @@ const SCOUT_ALIVE: f32 = 0.1;
 /// Where learned weights are kept between matches, relative to the working
 /// directory. None in tests, so they never read or overwrite a real save.
 const BRAINS_FILE: Option<&str> = if cfg!(test) { None } else { Some("brains.json") };
+/// Where each match's saved weights are appended for the graph. None in tests, like `BRAINS_FILE`.
+const HISTORY: Option<&str> = if cfg!(test) { None } else { Some(history::HISTORY_FILE) };
 /// Will force a unit to do something if idle for too long
 const _IDLE_SHOCK: i32 = 5;
 
@@ -53,7 +56,7 @@ fn worker_brain() -> FlyBrainConnectome {
         vec![
             [0.6, 0.0, 0.0, 0.0],  // Retreat: needs ~2 spikes, so threat >= ~0.11
             [-1.0, 0.6, 0.0, 0.0], // Gather: drawn to sugar, bias covers far from it
-            [-1.0, 0.0, 0.0, 0.2], // Build: when rich and safe
+            [-1.0, 0.0, 0.0, 0.6], // Build: when rich and safe
         ],
         DECAY,
         THRESHOLD,
@@ -76,7 +79,11 @@ fn army_brain() -> FlyBrainConnectome {
         DECAY,
         THRESHOLD,
         vec![0.3, 0.3, 0.1],
-        vec![MotorAction::Attack, MotorAction::Explore, MotorAction::Retreat],
+        vec![
+            MotorAction::Attack, 
+            MotorAction::Explore, 
+            MotorAction::Retreat
+        ],
     )
 }
 
@@ -89,7 +96,10 @@ fn scout_brain() -> FlyBrainConnectome {
         DECAY,
         THRESHOLD,
         vec![0.0, 0.3],
-        vec![MotorAction::Retreat, MotorAction::Explore],
+        vec![
+            MotorAction::Retreat, 
+            MotorAction::Explore
+        ],
     )
 }
 
@@ -120,6 +130,8 @@ enum Role {
 }
 
 impl Role {
+    const ALL: [Role; 4] = [Role::Worker, Role::Army, Role::Scout, Role::Trebuchet];
+
     /// Name of the role's weights in `BrainStore`
     fn key(self) -> &'static str {
         match self {
@@ -136,7 +148,7 @@ impl Role {
             Role::Worker => worker_brain(),
             Role::Army => army_brain(),
             Role::Scout => scout_brain(),
-            Role::Trebuchet=> trebuchet_brain(),
+            Role::Trebuchet => trebuchet_brain(),
         };
         if let Some(saved) = store.weights.get(self.key()) {
             // A save from before a motor was added or removed is ignored
@@ -150,6 +162,9 @@ pub struct Flaud {
     regiments: Vec<BrainGroup>,
     workers: Vec<BrainGroup>,
     armies: Vec<BrainGroup>,
+    /// Always empty for now: `update_groups` doesn't group trebuchets yet and
+    /// nothing produces them. Their saved weights are kept until it does.
+    trebuchets: Vec<BrainGroup>,
     building_costs: HashMap<BuildingType, i32>,
     map: MapDto,
     rules: RulesDto,
@@ -199,6 +214,7 @@ impl Bot for Flaud {
             (Role::Worker, &mut self.workers),
             (Role::Army, &mut self.armies),
             (Role::Scout, &mut self.regiments),
+            (Role::Trebuchet, &mut self.trebuchets),
         ] {
             for (i, g) in groups.iter_mut().enumerate() {
                 let Some(at) = centroid(&g.ids, s) else {
@@ -241,6 +257,7 @@ impl Bot for Flaud {
             regiments: vec![],
             armies: vec![],
             workers: vec![],
+            trebuchets: vec![],
             building_costs: Self::building_cost(&r),
             map: m,
             rules: r,
@@ -258,8 +275,12 @@ impl Bot for Flaud {
         self.update_groups(s);
         self.reward_groups(s);
         self.remember();
-        match BRAINS_FILE {
-            Some(p) => self.brains.save(Path::new(p)),
+        if let Some(p) = BRAINS_FILE {
+            self.brains.save(Path::new(p))?;
+        }
+        // Only after a good save, so the history never shows weights that weren't kept
+        match HISTORY {
+            Some(p) => history::append(Path::new(p), &history_rows(&self.brains)),
             None => Ok(()),
         }
     }
@@ -272,7 +293,7 @@ impl Flaud {
             acc
         });
 
-        for groups in [&mut self.workers, &mut self.armies, &mut self.regiments] {
+        for groups in [&mut self.workers, &mut self.armies, &mut self.regiments, &mut self.trebuchets] {
             Self::prune(groups, &alive);
         }
 
@@ -281,6 +302,7 @@ impl Flaud {
             .iter()
             .chain(&self.armies)
             .chain(&self.regiments)
+            .chain(&self.trebuchets)
             .flat_map(|g| &g.ids)
             .copied()
             .collect();
@@ -339,6 +361,7 @@ impl Flaud {
             (Role::Worker, &self.workers),
             (Role::Army, &self.armies),
             (Role::Scout, &self.regiments),
+            (Role::Trebuchet, &self.trebuchets),
         ] {
             if let Some(avg) = average_weights(groups) {
                 self.brains.weights.insert(role.key().into(), avg);
@@ -365,6 +388,7 @@ impl Flaud {
             (Role::Worker, &mut self.workers),
             (Role::Army, &mut self.armies),
             (Role::Scout, &mut self.regiments),
+            (Role::Trebuchet, &mut self.trebuchets),
         ] {
             for g in groups.iter_mut().filter(|g| !g.ids.is_empty() || !g.last.is_empty()) {
                 let r = reward(role, g, &kills, &mine, s);
@@ -440,7 +464,7 @@ impl Flaud {
             Role::Worker => &self.workers,
             Role::Army => &self.armies,
             Role::Scout => &self.regiments,
-            Role::Trebuchet => &self.regiments,
+            Role::Trebuchet => &self.trebuchets,
         }
     }
 
@@ -611,6 +635,35 @@ fn senses(maps: &HeatMaps, at: Loc, wealth: f32) -> [f32; SENSES] {
     out[PREY] = sample(&maps.prey, w, h, x, y);
     out[WEALTH] = wealth;
     out
+}
+
+/// One history row per real synapse of every saved role. Synapses that start
+/// at 0 are skipped: Dale's law keeps them at 0, so they'd be flat lines. A
+/// save whose shape no longer matches its brain is skipped too, as `load_weights` would.
+fn history_rows(store: &BrainStore) -> Vec<history::Row> {
+    let mut rows = Vec::new();
+    for role in Role::ALL {
+        let Some(saved) = store.weights.get(role.key()) else {
+            continue;
+        };
+        let fresh = role.brain(&BrainStore::default());
+        if saved.len() != fresh.weights.len() {
+            continue;
+        }
+        for (m, (row, sign)) in saved.iter().zip(&fresh.plasticity.sign).enumerate() {
+            for s in (0..SENSES).filter(|&s| sign[s] != 0.0) {
+                rows.push(history::Row {
+                    matches: store.matches,
+                    role: role.key().into(),
+                    motor: m,
+                    action: format!("{:?}", fresh.actions[m]),
+                    sense: s,
+                    weight: row[s],
+                });
+            }
+        }
+    }
+    rows
 }
 
 /// Mean of each weight across `groups`, which must all share one role (and so
@@ -2106,5 +2159,29 @@ mod flaud_tests {
         let me = fixtures::state().you.slot;
         b.update_groups(&with_units(vec![placed(1, UnitType::Scout, me, 2, 2)]));
         assert_eq!(b.regiments[0].brain.weights, scout_brain().weights);
+    }
+
+    // --- weight history ---
+
+    #[test]
+    fn history_logs_each_real_synapse_of_a_saved_role() {
+        let mut store = BrainStore { matches: 22, ..Default::default() };
+        let mut w = worker_brain().weights;
+        w[1][SUGAR] = 0.9;
+        store.weights.insert("worker".into(), w);
+        let rows = history_rows(&store);
+
+        // Retreat<-threat, Gather<-threat, Gather<-sugar, Build<-threat, Build<-wealth
+        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert!(rows.iter().all(|r| r.matches == 22 && r.role == "worker"));
+        let gather_sugar = rows.iter().find(|r| r.motor == 1 && r.sense == SUGAR).unwrap();
+        assert_eq!((gather_sugar.action.as_str(), gather_sugar.weight), ("Gather", 0.9));
+    }
+
+    #[test]
+    fn history_skips_unsaved_roles_and_saves_of_the_wrong_shape() {
+        let mut store = BrainStore::default();
+        store.weights.insert("scout".into(), vec![[0.5; SENSES]; 7]);
+        assert!(history_rows(&store).is_empty());
     }
 }

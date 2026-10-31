@@ -5,7 +5,9 @@ use crate::bots::test_bot::TestBot;
 use crate::logic::api::Api;
 use crate::data::models::*;
 use crate::logic::shared::Bot;
+use crate::logic::history::HISTORY_FILE;
 use crate::ui::match_screen::MatchScreen;
+use crate::ui::history_screen;
 use crate::ui::startup::Args;
 use crossterm::ExecutableCommand;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, MoveToRow, Show};
@@ -13,11 +15,14 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use std::io::{self, Write, stdout};
+use std::path::Path;
 use std::time::Instant;
 
-const MENU_ITEMS: usize = 8;
+const MENU_ITEMS: usize = 7;
 /// Main-menu entry that opens the match settings submenu instead of running an action.
 const CONFIGURE_ITEM: usize = 5;
+/// Main-menu entry that opens the weight history graph.
+const HISTORY_ITEM: usize = 6;
 /// Rows in the match settings submenu: mode, house bot, seats, tick ms, max ticks, seed, map width, map height.
 const SETTING_ITEMS: usize = 8;
 
@@ -115,6 +120,7 @@ impl MenuContext {
                 KeyCode::Char('k') | KeyCode::Char('w') | KeyCode::Up => self.move_cursor(-1),
                 KeyCode::Char('j') | KeyCode::Char('s') | KeyCode::Down => self.move_cursor(1),
                 KeyCode::Enter if self.cursor_pos == CONFIGURE_ITEM => self.configure_match()?,
+                KeyCode::Enter if self.cursor_pos == HISTORY_ITEM => history_screen::show(Path::new(HISTORY_FILE))?,
                 KeyCode::Enter => {
                     Self::clear_screen()?;
                     self.execute(self.cursor_pos).await?;
@@ -570,7 +576,7 @@ impl MenuContext {
         Self::clear_screen()?;
 
         print!(
-            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\nLogic: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n[{}] Change Logic\r\n[{}] Configure Match\r\n\r\n",
+            "\r\n\t[NetRTS Flaud]\r\nBotName: {}\r\nServerAddr: {}\r\nApiKey: {}\r\nLogic: {}\r\n\r\n[{}] Create Game\r\n[{}] Join Game\r\n[{}] View Results\r\n[{}] Change Bot\r\n[{}] Change Logic\r\n[{}] Configure Match\r\n[{}] Weight History\r\n\r\n",
             self.client.bot_name.to_string().yellow(),
             self.client.server.to_string().blue(),
             Self::mask_key(&self.client.api_key).green(),
@@ -581,6 +587,7 @@ impl MenuContext {
             self.is_selected(3).green(),
             self.is_selected(4).green(),
             self.is_selected(5).green(),
+            self.is_selected(HISTORY_ITEM).green(),
         );
 
         stdout().flush()
