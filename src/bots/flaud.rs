@@ -354,6 +354,11 @@ impl Flaud {
         self.enemies_last = s.enemy_units().map(|u| (u.id, (u.x, u.y))).collect();
     }
 
+    /// Punishes groups based on last tick then snapshots it for next tick
+    fn punish_groups(&mut self, s: &GameStateDto) {
+        
+    }
+
     /// Resets `units_since_build` when a building we haven't seen completed appears.
     /// Tracks ids, not a count, so one lost and one finished on the same tick still resets.
     fn note_new_buildings(&mut self, s: &GameStateDto) {

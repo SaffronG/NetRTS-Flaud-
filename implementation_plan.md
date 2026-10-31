@@ -6,7 +6,7 @@ The work comes in five phases, and each one depends on the one before it. **Phas
 
 ```
 Phase 1  learn from death        (punish before pruning, keep dead brains)
-Phase 2  split learning from saving  (a match returns weights; something else writes them)
+Phase 2  split learning from saving  (a match returns a smoothed snapshot; something else writes it)
 Phase 3  pseudo-novel conditions (a round seed decides each instance's settings)
 Phase 4  parallel training rounds (run n, average, save once)
 Phase 5  weight history + graph  (append one row per weight per round)
@@ -89,6 +89,60 @@ Give Flaud a way to start from a `BrainStore` passed in and to hand back what it
 
 Normal play keeps working as it does now: load, play, `finish` saves. Training uses the new path. Ownership: returning the store **by value** (not `&`) lets the match task hand it back across threads with no lifetimes involved.
 
+What this returns is the **smoothed snapshot** from Step 4a, not the raw final weights.
+
+### Step 4a: Smoothed snapshot (an exponential moving average of the weights)
+
+Each instance keeps a running snapshot of each role's weights **in memory**, updated every $\tau$ ticks. At match end, that snapshot is what Step 4 returns. Nothing touches the disk mid-match, so the single-writer design is unchanged.
+
+**Why:** the final weights depend on the last few ticks, and the end of a match is chaotic. A wipe in the last 20 ticks gives a jolt of punishment the brain never gets to balance. A moving average over the late part of the match smooths that noise out (this is called *Polyak averaging* or weight averaging) without the heavy lag of an equal-weight mean over the whole match.
+
+**The math**
+
+At snapshot $k$, first take the role's current weights, lifetime-weighted over living **and** fallen groups (the same rule as Step 3):
+
+$$W_k = \frac{\sum_g \ell_g\, W^{(g)}}{\sum_g \ell_g}$$
+
+then fold them into the running snapshot:
+
+$$S_1 = W_1, \qquad S_k = \beta\, S_{k-1} + (1-\beta)\, W_k \quad (k \ge 2)$$
+
+- $W_k$: the role's weights at snapshot $k$ (`Vec<[f32; SENSES]>`, each in $[-W_{max}, W_{max}]$)
+- $S_k$: the running snapshot after $k$ snapshots, same shape
+- $\beta \in [0, 1)$: how much of the old snapshot to keep (suggested name `SNAPSHOT_KEEP`)
+- $\tau$: ticks between snapshots (suggested name `SNAPSHOT_EVERY`)
+- $\ell_g$, $W^{(g)}$: as in Step 3
+
+In plain words, each snapshot moves the running value a fraction $1-\beta$ of the way toward the current weights. A snapshot taken $j$ steps ago counts with weight $(1-\beta)\beta^{j}$, so older ones fade out geometrically. The memory is about $\frac{1}{1-\beta}$ snapshots, or $\frac{\tau}{1-\beta}$ ticks.
+
+**Choosing $\beta$.** Make the memory cover the last quarter of a match of $T$ ticks:
+
+$$\frac{\tau}{1-\beta} = \frac{T}{4} \quad\Longrightarrow\quad \beta = 1 - \frac{4\tau}{T}$$
+
+With $\tau = 50$ and $T = 2000$, $\beta = 0.9$: the snapshot reflects about the last 500 ticks. If Phase 3 randomizes match length, compute $\beta$ from that instance's `max_ticks` rather than using a fixed constant, so short and long matches both average over their last quarter.
+
+**What it costs.** The snapshot lags the live weights by about $\frac{\tau}{1-\beta}$ ticks. For a weight drifting steadily at $v$ per tick, the snapshot ends about $v\,\frac{\tau\beta}{1-\beta}$ behind the final weight. With $\beta = 0.9$ that's roughly 450 ticks of drift, compared with half the match (1000 ticks) for an equal-weight mean. Learning *inside* the match still runs at full speed; only what's carried into the next match is smoothed.
+
+It is still a convex combination of weights that obey Dale's law and the $\pm W_{max}$ bounds, so $S_k$ does too. No clipping is needed.
+
+**Steps**
+
+1. A small struct per role (for example in `memory.rs`) holding `Option<Vec<[f32; SENSES]>>`: `None` until the first snapshot. Use `None` rather than zeros, because initializing $S_0 = 0$ would drag every weight toward 0 and look like "weakening" on the graph. A method `fold(&mut self, w, beta)` applies the recurrence above.
+2. In `Flaud::decide`, every `SNAPSHOT_EVERY` ticks (`state.tick % SNAPSHOT_EVERY == 0`), compute $W_k$ for each role from living groups plus the graveyard, and `fold` it in.
+3. In the end-of-match path (Step 4), take **one last snapshot** before returning, so the final stretch after the last multiple of $\tau$ counts too.
+4. If a role never got a snapshot (a very short match, or the role never existed), fall back to its lifetime-weighted final weights, or leave it out so the merge keeps the stored value, as `remember` does now.
+5. Normal play's `finish` can save the snapshot too, so single matches and training rounds carry the same thing forward.
+
+**Tests:**
+- **The first snapshot is taken as-is.** `fold` once with $W$: the snapshot equals $W$ (it doesn't come out as $(1-\beta)W$).
+- **The recurrence.** $\beta = 0.5$: fold 0.0, then 1.0, then 1.0. The snapshot is 0.75.
+- **Constant weights are a fixed point.** Fold the same $W$ ten times: the snapshot equals $W$.
+- **Bounds hold.** Fold random values within $[0, W_{max}]$: the snapshot stays inside.
+- **The graveyard is included.** A group that dies between two snapshots still shows up in the next $W_k$ (through Step 2's graveyard).
+- **The last snapshot is taken.** A match ending at a tick that isn't a multiple of $\tau$ still folds in its final weights.
+
+**Afterwards:** add the moving-average equation to the "Current fly-brain equations" section in `CLAUDE.md`.
+
 ### Step 5: Headless match runner
 
 `play_match` (`src/ui/console.rs:386`) is tied to `self.client.match_id` and to `MatchScreen`. Pull the tick loop (get state → `decide` → `submit_commands` → long-poll) out into a function that takes a match id and an `&Api` (or `Arc<Api>`), draws nothing, and returns the learned store and the match result. `play_match` can then call it and add the screen on top, or keep its own loop if the screen is too tied in.
@@ -149,7 +203,7 @@ The same rule as Step 3, one level up:
 
 $$W^{new}_{m,s} = \frac{\sum_{i} L_i\, W^{(i)}_{m,s}}{\sum_i L_i}$$
 
-- $W^{(i)}_{m,s}$: instance $i$'s learned weight for the role
+- $W^{(i)}_{m,s}$: instance $i$'s smoothed snapshot for the role ($S$ from Step 4a)
 - $L_i$: the total of $\ell_g$ for that role in instance $i$ (returned in Step 4). Use $L_i = 1$ for a plain average
 - $i$: only instances that have weights for this role. A role nobody used keeps its stored weights, as `remember` does now
 
@@ -210,5 +264,7 @@ Later, if wanted: sparklines in the terminal visualizer (crossterm only), or `ra
 | 4 | `matches`: +n or +1 per round; add `rounds`? (Step 8) | +n, and add `rounds` |
 | 5 | History format (Step 10) | CSV |
 | 6 | How training starts (Step 9) | CLI flags first, menu later |
+| 7 | Snapshot aggregate (Step 4a) | **Decided:** exponential moving average |
+| 8 | `SNAPSHOT_EVERY` $\tau$ and the horizon for $\beta$ (Step 4a) | $\tau = 50$, horizon = last quarter of the match ($\beta = 1 - 4\tau/T$) |
 
 **Next:** Phase 1, Step 1, the test that a wiped group gets punished. Write it first and watch it fail.
