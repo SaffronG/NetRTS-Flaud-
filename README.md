@@ -44,6 +44,12 @@ docker run --rm -it --env-file .env netrts-flaud --name Flaud
 
 Inside the container a newly registered key is saved to the container's own `.env`, which is lost when it exits, so copy the key into your local `.env` yourself.
 
+To keep the weight history, mount your local `brain_history.csv` (it must exist first, or Docker creates a folder in its place). `docker compose` already does this:
+
+``` shell
+docker run --rm -it --env-file .env -v "${PWD}/brain_history.csv:/app/brain_history.csv" netrts-flaud --name Flaud
+```
+
 ### Menu
 
 Use the arrow keys (or `w`/`s`, `k`/`j`) and Enter. `q` or Esc quits.

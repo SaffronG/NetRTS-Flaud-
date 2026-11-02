@@ -15,6 +15,11 @@ services:
     working_dir: /app/data
     volumes:
       - flaud-data:/app/data
+      # Share the local weight history so matches played in Docker append to it
+      # and the Weight History graph shows earlier runs. Only this file is bind
+      # mounted: brains.json is saved by renaming a temp file over it, which
+      # fails on a single-file mount, so it stays in the volume.
+      - ./brain_history.csv:/app/data/brain_history.csv
     # The menu needs a terminal and keyboard input.
     stdin_open: true
     tty: true

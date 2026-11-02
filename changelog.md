@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-02 14:26:15 MST — Share brain_history.csv with Docker
+
+### Changed
+
+- `compose.yaml`: bind mounts `./brain_history.csv` over `/app/data/brain_history.csv`. Before, the container wrote its history into the `flaud-data` volume, so the local file and the in-container Weight History graph never saw each other's matches. `history::append` opens the file in append mode, so writing through a single-file mount works. `brains.json` stays in the volume because `BrainStore::save` renames a temp file over it, and a rename onto a single-file bind mount fails (`EBUSY`).
+
+### Docs
+
+- `README.md`: the Docker section shows the matching `-v` flag for a bare `docker run` and warns that the file has to exist before mounting, or Docker creates a directory with that name.
+
 ## 2026-10-30 23:35:36 MDT — Weight history graph in the menu
 
 `cargo build` clean; `cargo test`: 227 passed, 1 ignored.
